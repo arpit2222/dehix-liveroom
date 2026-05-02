@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { useGetTalentInvites, useGetTalentCredentials, useRespondInvite, useUpdateAvailability } from "@workspace/api-client-react";
+import { useGetTalentInvites, useGetTalentCredentials, useRespondInvite, useUpdateAvailability, getGetTalentInvitesQueryKey, getGetTalentCredentialsQueryKey } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
 import { SBTCredentialCard } from "@/components/SBTCredentialCard";
 import { ReputationRing } from "@/components/ReputationRing";
@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button";
 export default function TalentDashboard() {
   const [, navigate] = useLocation();
   const { user, logout, isAuthenticated } = useAuth();
-  const { data: invites, refetch: refetchInvites } = useGetTalentInvites({ query: { enabled: isAuthenticated } });
-  const { data: credentials } = useGetTalentCredentials(user?._id ?? "", { query: { enabled: !!user?._id } });
+  const { data: invites, refetch: refetchInvites } = useGetTalentInvites({ query: { enabled: isAuthenticated, queryKey: getGetTalentInvitesQueryKey() } });
+  const { data: credentials } = useGetTalentCredentials(user?._id ?? "", { query: { enabled: !!user?._id, queryKey: getGetTalentCredentialsQueryKey(user?._id ?? "") } });
 
   const updateAvailability = useUpdateAvailability({
     mutation: { onSuccess: () => {} },

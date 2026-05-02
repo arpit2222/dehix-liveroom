@@ -1,13 +1,27 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY as string,
-  authDomain: `${import.meta.env.VITE_FIREBASE_PROJECT_ID as string}.firebaseapp.com`,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID as string,
-  storageBucket: `${import.meta.env.VITE_FIREBASE_PROJECT_ID as string}.firebasestorage.app`,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID as string,
-};
+const apiKey = import.meta.env.VITE_FIREBASE_API_KEY as string;
+const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID as string;
+const appId = import.meta.env.VITE_FIREBASE_APP_ID as string;
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+export const isFirebaseEnabled = !!(apiKey && projectId && appId && apiKey !== "undefined");
+
+let db: ReturnType<typeof getFirestore> | null = null;
+
+if (isFirebaseEnabled) {
+  try {
+    const app = initializeApp({
+      apiKey,
+      authDomain: `${projectId}.firebaseapp.com`,
+      projectId,
+      storageBucket: `${projectId}.firebasestorage.app`,
+      appId,
+    });
+    db = getFirestore(app);
+  } catch (e) {
+    console.warn("Firebase init failed — using local chat mode");
+  }
+}
+
+export { db };

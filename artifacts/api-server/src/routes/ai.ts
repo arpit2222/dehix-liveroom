@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { openai } from "../lib/openai.js";
+import { openai, isOpenAiEnabled } from "../lib/openai.js";
+import { mockScope, mockChat, mockNda, mockMilestones } from "../lib/mockAi.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
 import { RoomParticipant } from "../models/RoomParticipant.js";
@@ -19,6 +20,12 @@ router.post("/scope", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
   const { description } = parsed.data;
+
+  if (!isOpenAiEnabled) {
+    res.json(mockScope(description));
+    return;
+  }
+
   try {
     const prompt = `You are a senior Web3 project manager. A client has described a project. Extract and return ONLY valid JSON — no markdown, no explanation.
 
@@ -72,8 +79,8 @@ Return this exact JSON structure:
     const brief = JSON.parse(cleaned);
     res.json(brief);
   } catch (err) {
-    req.log.error({ err }, "scope error");
-    res.status(500).json({ error: "AI scoping failed" });
+    req.log.error({ err }, "scope error — falling back to mock");
+    res.json(mockScope(description));
   }
 });
 
@@ -155,6 +162,12 @@ router.post("/generate-nda", requireAuth, async (req: AuthRequest, res) => {
       .populate("userId", "name email");
     const talentNames = participants.map((p: any) => p.userId?.name ?? "Unknown").join(", ");
     const milestones = await Milestone.find({ roomId });
+    const milestoneList = milestones.map((m) => `• ${m.title}`).join("\n  ");
+
+    if (!isOpenAiEnabled) {
+      res.json({ content: mockNda(room.title, business?.name ?? "Business", talentNames, milestoneList) });
+      return;
+    }
 
     const prompt = `Generate a professional Web3 freelance NDA and project agreement. Return plain text only — no markdown.
 
@@ -184,8 +197,9 @@ Date: ${new Date().toLocaleDateString()}`;
     const content = completion.choices[0]?.message?.content ?? "";
     res.json({ content });
   } catch (err) {
-    req.log.error({ err }, "generateNda error");
-    res.status(500).json({ error: "NDA generation failed" });
+    req.log.error({ err }, "generateNda error — falling back to mock");
+    const room = await LiveRoom.findById(roomId).catch(() => null);
+    res.json({ content: mockNda(room?.title ?? "Project", "Business", "", "") });
   }
 });
 
@@ -196,6 +210,12 @@ router.post("/suggest-milestones", requireAuth, async (req: AuthRequest, res) =>
     return;
   }
   const { roomId, totalBudgetUsd = 50000 } = parsed.data;
+
+  if (!isOpenAiEnabled) {
+    res.json(mockMilestones(totalBudgetUsd));
+    return;
+  }
+
   try {
     const room = await LiveRoom.findById(roomId);
     if (!room) {
@@ -224,8 +244,8 @@ Return array of: [{ "title": string, "description": string, "amountUsd": number,
     const suggestions = JSON.parse(cleaned);
     res.json(suggestions);
   } catch (err) {
-    req.log.error({ err }, "suggestMilestones error");
-    res.status(500).json({ error: "Milestone suggestion failed" });
+    req.log.error({ err }, "suggestMilestones error — falling back to mock");
+    res.json(mockMilestones(totalBudgetUsd));
   }
 });
 
@@ -236,6 +256,13 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
   const { message, roomId } = parsed.data;
+
+  if (!isOpenAiEnabled) {
+    const room = await LiveRoom.findById(roomId).catch(() => null);
+    res.json({ reply: mockChat(message, room?.title ?? "your project") });
+    return;
+  }
+
   try {
     const room = await LiveRoom.findById(roomId);
     const brief = room?.aiScopedBrief as any;
@@ -262,8 +289,9 @@ Be concise, direct, and technically accurate.`;
     const reply = completion.choices[0]?.message?.content ?? "I couldn't process that request.";
     res.json({ reply });
   } catch (err) {
-    req.log.error({ err }, "aiChat error");
-    res.status(500).json({ error: "AI chat failed" });
+    req.log.error({ err }, "aiChat error — falling back to mock");
+    const room = await LiveRoom.findById(roomId).catch(() => null);
+    res.json({ reply: mockChat(message, room?.title ?? "your project") });
   }
 });
 

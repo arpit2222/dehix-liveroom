@@ -1,5 +1,5 @@
 import { useParams, useLocation } from "wouter";
-import { useGetTalentProfile, useGetTalentCredentials } from "@workspace/api-client-react";
+import { useGetTalentProfile, useGetTalentCredentials, getGetTalentProfileQueryKey, getGetTalentCredentialsQueryKey } from "@workspace/api-client-react";
 import { SBTCredentialCard } from "@/components/SBTCredentialCard";
 import { ReputationRing } from "@/components/ReputationRing";
 import { Button } from "@/components/ui/button";
@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button";
 export default function TalentProfile() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
-  const { data: profileData, isLoading: loadingProfile } = useGetTalentProfile(id ?? "", { query: { enabled: !!id } });
-  const { data: credentials } = useGetTalentCredentials(id ?? "", { query: { enabled: !!id } });
+  const { data: profileData, isLoading: loadingProfile } = useGetTalentProfile(id ?? "", { query: { enabled: !!id, queryKey: getGetTalentProfileQueryKey(id ?? "") } });
+  const { data: credentials } = useGetTalentCredentials(id ?? "", { query: { enabled: !!id, queryKey: getGetTalentCredentialsQueryKey(id ?? "") } });
 
   const profile = (profileData as any);
   const user = profile?.user;

@@ -6,12 +6,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+const DEMO_ACCOUNTS = [
+  { label: "Business", email: "business@demo.com", password: "demo123", desc: "Nexus Protocol — open rooms, scope projects, hire talent" },
+  { label: "Developer", email: "alex@demo.com", password: "demo123", desc: "Alex Chen — Solidity L2 · Reputation 920" },
+];
+
 export default function Login() {
   const [, navigate] = useLocation();
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loadingDemo, setLoadingDemo] = useState<string | null>(null);
 
   const { mutate, isPending } = useLogin({
     mutation: {
@@ -21,6 +27,7 @@ export default function Login() {
       },
       onError: (err: any) => {
         setError(err?.data?.error ?? err?.message ?? "Login failed");
+        setLoadingDemo(null);
       },
     },
   });
@@ -29,6 +36,12 @@ export default function Login() {
     e.preventDefault();
     setError("");
     mutate({ data: { email, password } });
+  };
+
+  const quickLogin = (demoEmail: string, demoPassword: string, label: string) => {
+    setError("");
+    setLoadingDemo(label);
+    mutate({ data: { email: demoEmail, password: demoPassword } });
   };
 
   return (
@@ -43,6 +56,43 @@ export default function Login() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight mb-1">Welcome back</h1>
           <p className="text-sm text-muted-foreground">Sign in to your account</p>
+        </div>
+
+        {/* QUICK DEMO ACCESS */}
+        <div className="mb-6 rounded-xl border border-primary/25 bg-primary/5 p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+            <span className="text-xs font-semibold text-primary uppercase tracking-wider">Quick Demo Access</span>
+          </div>
+          <div className="space-y-2">
+            {DEMO_ACCOUNTS.map((acc) => (
+              <button
+                key={acc.email}
+                onClick={() => quickLogin(acc.email, acc.password, acc.label)}
+                disabled={isPending}
+                className="w-full text-left rounded-lg border border-border/50 bg-background/50 px-3 py-2.5 hover:border-primary/40 hover:bg-primary/5 transition-colors group disabled:opacity-50"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-semibold text-foreground group-hover:text-primary transition-colors">
+                      {loadingDemo === acc.label ? "Signing in..." : `Enter as ${acc.label}`}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">{acc.desc}</div>
+                  </div>
+                  <div className="text-muted-foreground/40 group-hover:text-primary/60 transition-colors ml-2">→</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="relative mb-6">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-border/40" />
+          </div>
+          <div className="relative flex justify-center">
+            <span className="bg-background px-3 text-xs text-muted-foreground/60">or sign in manually</span>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -78,7 +128,7 @@ export default function Login() {
           )}
 
           <Button type="submit" className="w-full" disabled={isPending}>
-            {isPending ? "Signing in..." : "Sign in"}
+            {isPending && !loadingDemo ? "Signing in..." : "Sign in"}
           </Button>
         </form>
 
@@ -87,14 +137,6 @@ export default function Login() {
           <button onClick={() => navigate("/register")} className="text-primary hover:underline font-medium">
             Create one
           </button>
-        </div>
-
-        <div className="mt-8 rounded-lg border border-border/50 bg-card/50 p-4">
-          <p className="text-xs text-muted-foreground font-medium mb-2">Demo accounts</p>
-          <div className="space-y-1 text-xs font-mono text-muted-foreground">
-            <div>business@demo.com / demo123 (Business)</div>
-            <div>alex@demo.com / demo123 (Talent)</div>
-          </div>
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { useGetMyRooms } from "@workspace/api-client-react";
+import { useGetMyRooms, getGetMyRoomsQueryKey } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 
@@ -15,7 +15,7 @@ const STATUS_COLORS: Record<string, string> = {
 export default function BusinessDashboard() {
   const [, navigate] = useLocation();
   const { user, logout, isAuthenticated } = useAuth();
-  const { data: rooms, isLoading } = useGetMyRooms({ query: { enabled: isAuthenticated } });
+  const { data: rooms, isLoading } = useGetMyRooms({ query: { enabled: isAuthenticated, queryKey: getGetMyRoomsQueryKey() } });
 
   if (!isAuthenticated) {
     return (

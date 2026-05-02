@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useLocation } from "wouter";
 import { io, type Socket } from "socket.io-client";
 import {
   collection, addDoc, onSnapshot, orderBy, query as fsQuery, serverTimestamp
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, isFirebaseEnabled } from "@/lib/firebase";
 import {
   useGetRoom, useGetRoomTickets, useGetRoomMilestones, useGetRoomNda,
   useCreateTicket, useUpdateTicket, useCreateMilestone, useSignNda, useGenerateNda,
@@ -13,7 +13,6 @@ import {
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { ReputationRing } from "@/components/ReputationRing";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 
@@ -43,6 +42,8 @@ interface ChatMessage {
   isAi: boolean;
   createdAt: any;
 }
+
+let localMsgId = 0;
 
 export default function LiveRoom() {
   const { id } = useParams<{ id: string }>();
@@ -79,53 +80,44 @@ export default function LiveRoom() {
   const milestones = Array.isArray(milestonesData) ? milestonesData : [];
   const nda = ndaData as any;
 
-  const createTicket = useCreateTicket({
-    mutation: {
-      onSuccess: () => { setNewTicketTitle(""); refetchTickets(); },
-    },
-  });
+  const addLocalMessage = useCallback((msg: Omit<ChatMessage, "id" | "createdAt">) => {
+    const newMsg: ChatMessage = { ...msg, id: String(++localMsgId), createdAt: new Date() };
+    setChatMessages((prev) => [...prev, newMsg]);
+    setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+  }, []);
 
+  const createTicket = useCreateTicket({
+    mutation: { onSuccess: () => { setNewTicketTitle(""); refetchTickets(); } },
+  });
   const updateTicket = useUpdateTicket({
     mutation: { onSuccess: () => refetchTickets() },
   });
-
   const createMilestone = useCreateMilestone({
     mutation: {
-      onSuccess: () => {
-        setNewMilestoneTitle("");
-        setNewMilestoneAmount("");
-        refetchMilestones();
-      },
+      onSuccess: () => { setNewMilestoneTitle(""); setNewMilestoneAmount(""); refetchMilestones(); },
     },
   });
-
   const signNda = useSignNda({
     mutation: { onSuccess: () => refetchNda() },
   });
-
   const generateNda = useGenerateNda({
-    mutation: {
-      onSuccess: () => refetchNda(),
-    },
+    mutation: { onSuccess: () => refetchNda() },
   });
-
   const assembleSquad = useAssembleSquad({
-    mutation: {
-      onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }),
-    },
+    mutation: { onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }) },
   });
-
   const aiChat = useAiChat({
     mutation: {
       onSuccess: async (data: any) => {
-        if (data.reply && roomId && user) {
+        if (!data.reply) return;
+        const aiMsg = { userId: "ai", userName: "DEHIX AI", message: data.reply, isAi: true };
+        if (isFirebaseEnabled && db) {
           await addDoc(collection(db, `test_livechat/rooms/${roomId}/messages`), {
-            userId: "ai",
-            userName: "DEHIX AI",
-            message: data.reply,
-            isAi: true,
+            ...aiMsg,
             createdAt: serverTimestamp(),
           });
+        } else {
+          addLocalMessage(aiMsg);
         }
       },
     },
@@ -136,20 +128,16 @@ export default function LiveRoom() {
     const socket = io(window.location.origin, { transports: ["websocket", "polling"] });
     socketRef.current = socket;
     socket.emit("room:join", { roomId, userId: user._id });
-    socket.on("room:participant_joined", () => {
-      queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) });
-    });
+    socket.on("room:participant_joined", () => queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }));
     socket.on("room:ticket_updated", () => refetchTickets());
     socket.on("room:milestone_updated", () => refetchMilestones());
     socket.on("room:nda_signed", () => refetchNda());
-    socket.on("room:squad_formed", () => {
-      queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) });
-    });
+    socket.on("room:squad_formed", () => queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }));
     return () => { socket.disconnect(); };
   }, [roomId, user]);
 
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId || !isFirebaseEnabled || !db) return;
     const q = fsQuery(
       collection(db, `test_livechat/rooms/${roomId}/messages`),
       orderBy("createdAt", "asc")
@@ -166,26 +154,30 @@ export default function LiveRoom() {
     if (!chatInput.trim() || !roomId || !user) return;
     const msg = chatInput.trim();
     setChatInput("");
-    await addDoc(collection(db, `test_livechat/rooms/${roomId}/messages`), {
-      userId: user._id,
-      userName: user.name,
-      message: msg,
-      isAi: false,
-      createdAt: serverTimestamp(),
-    });
+    const msgData = { userId: user._id, userName: user.name, message: msg, isAi: false };
+    if (isFirebaseEnabled && db) {
+      await addDoc(collection(db, `test_livechat/rooms/${roomId}/messages`), {
+        ...msgData,
+        createdAt: serverTimestamp(),
+      });
+    } else {
+      addLocalMessage(msgData);
+    }
   };
 
   const askAi = async () => {
-    if (!chatInput.trim() || !roomId) return;
+    if (!chatInput.trim() || !roomId || !user) return;
     const msg = chatInput.trim();
     setChatInput("");
-    await addDoc(collection(db, `test_livechat/rooms/${roomId}/messages`), {
-      userId: user?._id ?? "guest",
-      userName: user?.name ?? "User",
-      message: msg,
-      isAi: false,
-      createdAt: serverTimestamp(),
-    });
+    const msgData = { userId: user._id, userName: user.name, message: msg, isAi: false };
+    if (isFirebaseEnabled && db) {
+      await addDoc(collection(db, `test_livechat/rooms/${roomId}/messages`), {
+        ...msgData,
+        createdAt: serverTimestamp(),
+      });
+    } else {
+      addLocalMessage(msgData);
+    }
     aiChat.mutate({ data: { message: msg, roomId } });
   };
 
@@ -199,7 +191,6 @@ export default function LiveRoom() {
       </div>
     );
   }
-
   if (loadingRoom) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -207,7 +198,6 @@ export default function LiveRoom() {
       </div>
     );
   }
-
   if (!room) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -235,23 +225,26 @@ export default function LiveRoom() {
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => navigate(isBusiness ? "/business/dashboard" : "/talent/dashboard")}
-              className="text-muted-foreground hover:text-foreground transition-colors text-sm"
+              className="text-muted-foreground hover:text-foreground transition-colors text-sm shrink-0"
             >
-              Back
+              ← Back
             </button>
-            <span className="text-border/40">/</span>
+            <span className="text-border/40 shrink-0">/</span>
             <span className="font-semibold text-sm truncate">{room.title}</span>
             <span className={`text-xs px-2 py-0.5 rounded border font-medium capitalize shrink-0 ${STATUS_COLORS[room.status] ?? ""}`}>
               {room.status}
             </span>
-            <span className="text-xs font-mono text-muted-foreground shrink-0">{room.roomCode}</span>
+            <span className="text-xs font-mono text-muted-foreground shrink-0 hidden sm:inline">{room.roomCode}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {!isFirebaseEnabled && (
+              <span className="text-[10px] text-amber-400 border border-amber-800/40 bg-amber-950/30 rounded px-2 py-0.5 hidden sm:inline">
+                Demo chat
+              </span>
+            )}
             {room.meetLink && (
               <a href={room.meetLink} target="_blank" rel="noreferrer">
-                <Button size="sm" variant="outline" className="text-xs h-7">
-                  Meet
-                </Button>
+                <Button size="sm" variant="outline" className="text-xs h-7">Meet</Button>
               </a>
             )}
           </div>
@@ -260,74 +253,76 @@ export default function LiveRoom() {
 
       {/* 3-COLUMN LAYOUT */}
       <div className="flex-1 flex overflow-hidden">
-        {/* LEFT: Roles + Participants */}
-        <div className="w-60 shrink-0 border-r border-border/40 flex flex-col overflow-y-auto bg-card/30">
+        {/* LEFT */}
+        <div className="w-56 shrink-0 border-r border-border/40 flex flex-col overflow-y-auto bg-card/30">
           <div className="p-3 space-y-5">
             <div>
               <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                 Roles ({roles.length})
               </div>
-              <div className="space-y-1.5">
-                {roles.length === 0 && (
-                  <div className="text-xs text-muted-foreground/50 py-2">No roles defined</div>
-                )}
-                {roles.map((role: any) => (
-                  <div key={role._id} className="rounded-lg border border-border/30 bg-background/40 p-2">
-                    <div className="flex items-start justify-between gap-1 mb-0.5">
-                      <span className="text-xs font-medium text-foreground leading-tight line-clamp-2">{role.roleTitle}</span>
-                      <span className={`shrink-0 text-[9px] px-1 py-0.5 rounded border capitalize ml-1 ${
-                        role.status === "filled" ? "text-emerald-400 bg-emerald-950/40 border-emerald-800/40" :
-                        role.status === "accepted" ? "text-cyan-400 bg-cyan-950/40 border-cyan-800/40" :
-                        "text-amber-400 bg-amber-950/40 border-amber-800/40"
-                      }`}>
-                        {role.status}
-                      </span>
+              {roles.length === 0 ? (
+                <div className="text-xs text-muted-foreground/50 py-2">No roles defined</div>
+              ) : (
+                <div className="space-y-1.5">
+                  {roles.map((role: any) => (
+                    <div key={role._id} className="rounded-lg border border-border/30 bg-background/40 p-2">
+                      <div className="flex items-start justify-between gap-1 mb-0.5">
+                        <span className="text-xs font-medium text-foreground leading-tight line-clamp-2">{role.roleTitle}</span>
+                        <span className={`shrink-0 text-[9px] px-1 py-0.5 rounded border capitalize ml-1 ${
+                          role.status === "filled" ? "text-emerald-400 bg-emerald-950/40 border-emerald-800/40" :
+                          role.status === "accepted" ? "text-cyan-400 bg-cyan-950/40 border-cyan-800/40" :
+                          "text-amber-400 bg-amber-950/40 border-amber-800/40"
+                        }`}>
+                          {role.status}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground truncate">{role.skillDomain}</div>
+                      <div className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                        L{role.requiredLevel} · {role.minReputation}+ rep
+                      </div>
                     </div>
-                    <div className="text-[10px] text-muted-foreground truncate">{role.skillDomain}</div>
-                    <div className="text-[10px] text-muted-foreground font-mono mt-0.5">
-                      L{role.requiredLevel} · {role.minReputation}+ rep
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div>
               <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                 Participants ({participants.length})
               </div>
-              <div className="space-y-1.5">
-                {participants.length === 0 && (
-                  <div className="text-xs text-muted-foreground/50 py-2">Waiting for talent</div>
-                )}
-                {participants.map((p: any) => {
-                  const u = p.user ?? (typeof p.userId === "object" ? p.userId : null);
-                  return (
-                    <button
-                      key={p._id}
-                      onClick={() => u?._id && navigate(`/talent/profile/${u._id}`)}
-                      className="w-full text-left rounded-lg border border-border/30 bg-background/40 p-2 hover:border-primary/30 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-full bg-primary/15 border border-primary/25 flex items-center justify-center shrink-0">
-                          <span className="text-primary font-bold text-[9px]">{u?.name?.[0]?.toUpperCase() ?? "?"}</span>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-xs font-medium truncate">{u?.name ?? "User"}</div>
-                          <div className={`text-[10px] ${p.status === "joined" ? "text-emerald-400" : "text-muted-foreground"}`}>
-                            {p.status}
+              {participants.length === 0 ? (
+                <div className="text-xs text-muted-foreground/50 py-2">Waiting for talent</div>
+              ) : (
+                <div className="space-y-1.5">
+                  {participants.map((p: any) => {
+                    const u = p.user ?? (typeof p.userId === "object" ? p.userId : null);
+                    return (
+                      <button
+                        key={p._id}
+                        onClick={() => u?._id && navigate(`/talent/profile/${u._id}`)}
+                        className="w-full text-left rounded-lg border border-border/30 bg-background/40 p-2 hover:border-primary/30 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-primary/15 border border-primary/25 flex items-center justify-center shrink-0">
+                            <span className="text-primary font-bold text-[9px]">{u?.name?.[0]?.toUpperCase() ?? "?"}</span>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium truncate">{u?.name ?? "User"}</div>
+                            <div className={`text-[10px] ${p.status === "joined" ? "text-emerald-400" : "text-muted-foreground"}`}>
+                              {p.status}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* CENTER: Tabs */}
+        {/* CENTER */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <div className="shrink-0 border-b border-border/40 px-4 flex items-center gap-1 h-10">
             {(["brief", "tickets", "milestones", "nda"] as TabKey[]).map((t) => (
@@ -339,6 +334,12 @@ export default function LiveRoom() {
                 }`}
               >
                 {t}
+                {t === "tickets" && tickets.length > 0 && (
+                  <span className="ml-1.5 text-[10px] text-muted-foreground">{tickets.length}</span>
+                )}
+                {t === "milestones" && milestones.length > 0 && (
+                  <span className="ml-1.5 text-[10px] text-muted-foreground">{milestones.length}</span>
+                )}
               </button>
             ))}
           </div>
@@ -358,16 +359,16 @@ export default function LiveRoom() {
                       <h2 className="font-bold text-lg mb-1">{brief.projectTitle}</h2>
                       <p className="text-sm text-muted-foreground leading-relaxed">{brief.projectSummary}</p>
                       <div className="flex items-center gap-4 mt-3 flex-wrap">
-                        <div className="text-xs text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           <span className="text-foreground/80 font-mono font-semibold">{brief.estimatedWeeks}w</span> timeline
-                        </div>
-                        <div className="text-xs text-muted-foreground capitalize">
+                        </span>
+                        <span className="text-xs text-muted-foreground capitalize">
                           <span className="text-foreground/80 font-semibold">{brief.complexity}</span> complexity
-                        </div>
+                        </span>
                         {brief.suggestedTotalBudgetUsd && (
-                          <div className="text-xs text-muted-foreground">
+                          <span className="text-xs text-muted-foreground">
                             <span className="text-foreground/80 font-mono font-semibold">${brief.suggestedTotalBudgetUsd?.toLocaleString()}</span> budget
-                          </div>
+                          </span>
                         )}
                       </div>
                     </div>
@@ -421,7 +422,7 @@ export default function LiveRoom() {
                         </div>
                         <div className="space-y-1.5 min-h-[80px]">
                           {colTickets.map((t: any) => (
-                            <div key={t._id} className="rounded-lg border border-border/40 bg-card p-2.5">
+                            <div key={t._id} className="rounded-lg border border-border/40 bg-card p-2.5 group">
                               <p className="text-xs font-medium leading-tight mb-1.5">{t.title}</p>
                               {t.estimatedHours && (
                                 <span className="text-[10px] text-muted-foreground font-mono">{t.estimatedHours}h</span>
@@ -433,7 +434,7 @@ export default function LiveRoom() {
                                     onClick={() => updateTicket.mutate({ id: t._id, data: { status: c.key } })}
                                     className="text-[10px] text-muted-foreground hover:text-primary transition-colors"
                                   >
-                                    {c.label}
+                                    → {c.label}
                                   </button>
                                 ))}
                               </div>
@@ -457,10 +458,7 @@ export default function LiveRoom() {
                       if (newMilestoneTitle.trim()) {
                         createMilestone.mutate({
                           id: roomId,
-                          data: {
-                            title: newMilestoneTitle,
-                            amountUsd: newMilestoneAmount ? Number(newMilestoneAmount) : undefined,
-                          },
+                          data: { title: newMilestoneTitle, amountUsd: newMilestoneAmount ? Number(newMilestoneAmount) : undefined },
                         });
                       }
                     }}
@@ -482,13 +480,13 @@ export default function LiveRoom() {
                     <Button size="sm" type="submit" disabled={createMilestone.isPending}>Add</Button>
                   </form>
                 )}
-                <div className="space-y-3">
-                  {milestones.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-border/50 p-8 text-center">
-                      <p className="text-sm text-muted-foreground">No milestones yet</p>
-                    </div>
-                  ) : (
-                    milestones.map((m: any, i: number) => (
+                {milestones.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border/50 p-8 text-center">
+                    <p className="text-sm text-muted-foreground">No milestones yet</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {milestones.map((m: any, i: number) => (
                       <div key={m._id} className="rounded-xl border border-border/40 bg-card p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex items-start gap-3">
@@ -513,17 +511,15 @@ export default function LiveRoom() {
                           </div>
                         </div>
                       </div>
-                    ))
-                  )}
-                  {milestones.length > 0 && (
+                    ))}
                     <div className="rounded-lg border border-border/30 bg-card/50 px-4 py-2.5 text-xs text-muted-foreground flex items-center justify-between">
                       <span>Total escrow</span>
                       <span className="font-mono font-semibold text-foreground">
                         ${milestones.reduce((s: number, m: any) => s + (m.amountUsd ?? 0), 0).toLocaleString()}
                       </span>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -539,23 +535,15 @@ export default function LiveRoom() {
                         onClick={() => generateNda.mutate({ data: { roomId } })}
                         disabled={generateNda.isPending}
                       >
-                        {generateNda.isPending ? "Generating..." : "Generate NDA with AI"}
+                        {generateNda.isPending ? "Generating..." : "Generate NDA"}
                       </Button>
                     )}
                   </div>
                 ) : (
                   <>
                     <div className="flex items-center justify-between">
-                      <span className={`text-xs px-2 py-0.5 rounded border capitalize ${
-                        nda.status === "signed" ? "text-emerald-400 bg-emerald-950/40 border-emerald-800/40" :
-                        nda.status === "pending_signatures" ? "text-amber-400 bg-amber-950/40 border-amber-800/40" :
-                        "text-muted-foreground bg-muted/30 border-border/40"
-                      }`}>
-                        {nda.status?.replace("_", " ")}
-                      </span>
-                      <div className="text-xs text-muted-foreground">
-                        {nda.signedBy?.length ?? 0} signatures
-                      </div>
+                      <StatusBadge status={nda.status === "signed" ? "verified" : nda.status === "pending_signatures" ? "disputed" : "revoked"} />
+                      <div className="text-xs text-muted-foreground">{nda.signedBy?.length ?? 0} signatures</div>
                     </div>
                     <div className="rounded-xl border border-border/50 bg-card/50 p-5 max-h-72 overflow-y-auto">
                       <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed">
@@ -563,17 +551,13 @@ export default function LiveRoom() {
                       </pre>
                     </div>
                     {!isSignedByMe && nda.status !== "signed" && (
-                      <Button
-                        className="w-full"
-                        onClick={() => signNda.mutate({ id: roomId })}
-                        disabled={signNda.isPending}
-                      >
+                      <Button className="w-full" onClick={() => signNda.mutate({ id: roomId })} disabled={signNda.isPending}>
                         Sign NDA
                       </Button>
                     )}
                     {isSignedByMe && (
                       <div className="text-center text-xs text-emerald-400 font-medium py-2">
-                        You have signed this NDA
+                        You have signed this NDA ✓
                       </div>
                     )}
                   </>
@@ -582,7 +566,6 @@ export default function LiveRoom() {
             )}
           </div>
 
-          {/* Assemble Squad bar */}
           {isOwner && allRolesFilled && room.status === "open" && (
             <div className="shrink-0 border-t border-border/40 p-3">
               <Button
@@ -596,7 +579,7 @@ export default function LiveRoom() {
           )}
         </div>
 
-        {/* RIGHT: Video + Chat */}
+        {/* RIGHT: Chat */}
         <div className="w-72 shrink-0 border-l border-border/40 flex flex-col overflow-hidden bg-card/20">
           <div className="shrink-0 border-b border-border/40 p-3">
             {room.meetLink ? (
@@ -613,14 +596,22 @@ export default function LiveRoom() {
             )}
           </div>
 
-          <div className="shrink-0 px-3 py-2 border-b border-border/40">
+          <div className="shrink-0 px-3 py-2 border-b border-border/40 flex items-center justify-between">
             <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Live Chat</span>
+            {!isFirebaseEnabled && (
+              <span className="text-[9px] text-amber-400/70 font-medium">demo mode</span>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
             {chatMessages.length === 0 && (
-              <div className="text-center py-8">
+              <div className="text-center py-8 space-y-2">
                 <p className="text-xs text-muted-foreground/40">Start the conversation</p>
+                {!isFirebaseEnabled && (
+                  <p className="text-[10px] text-muted-foreground/30 leading-relaxed px-2">
+                    Chat is session-only in demo mode. Add Firebase keys for persistence.
+                  </p>
+                )}
               </div>
             )}
             {chatMessages.map((msg) => (
@@ -647,12 +638,9 @@ export default function LiveRoom() {
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  sendChat();
-                }
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
               }}
-              placeholder="Message..."
+              placeholder="Message... (Enter to send)"
               className="w-full bg-card border border-border/50 rounded-md px-2.5 py-2 text-xs outline-none focus:border-primary/50 placeholder:text-muted-foreground/40 resize-none min-h-[52px]"
               rows={2}
             />
