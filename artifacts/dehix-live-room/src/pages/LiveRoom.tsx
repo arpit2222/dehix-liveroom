@@ -112,7 +112,7 @@ export default function LiveRoom() {
         if (!data.reply) return;
         const aiMsg = { userId: "ai", userName: "DEHIX AI", message: data.reply, isAi: true };
         if (isFirebaseEnabled && db) {
-          await addDoc(collection(db, `test_livechat/rooms/${roomId}/messages`), {
+          await addDoc(collection(db, `liverooms/${roomId}/messages`), {
             ...aiMsg,
             createdAt: serverTimestamp(),
           });
@@ -139,7 +139,7 @@ export default function LiveRoom() {
   useEffect(() => {
     if (!roomId || !isFirebaseEnabled || !db) return;
     const q = fsQuery(
-      collection(db, `test_livechat/rooms/${roomId}/messages`),
+      collection(db, `liverooms/${roomId}/messages`),
       orderBy("createdAt", "asc")
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -156,7 +156,7 @@ export default function LiveRoom() {
     setChatInput("");
     const msgData = { userId: user._id, userName: user.name, message: msg, isAi: false };
     if (isFirebaseEnabled && db) {
-      await addDoc(collection(db, `test_livechat/rooms/${roomId}/messages`), {
+      await addDoc(collection(db, `liverooms/${roomId}/messages`), {
         ...msgData,
         createdAt: serverTimestamp(),
       });
@@ -171,7 +171,7 @@ export default function LiveRoom() {
     setChatInput("");
     const msgData = { userId: user._id, userName: user.name, message: msg, isAi: false };
     if (isFirebaseEnabled && db) {
-      await addDoc(collection(db, `test_livechat/rooms/${roomId}/messages`), {
+      await addDoc(collection(db, `liverooms/${roomId}/messages`), {
         ...msgData,
         createdAt: serverTimestamp(),
       });
