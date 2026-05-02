@@ -6,6 +6,7 @@ import { RoomRole } from "../models/RoomRole.js";
 import { RoomParticipant } from "../models/RoomParticipant.js";
 import { Ticket } from "../models/Ticket.js";
 import { Milestone } from "../models/Milestone.js";
+import { Nda } from "../models/Nda.js";
 import { User } from "../models/User.js";
 import { SbtCredential } from "../models/SbtCredential.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
@@ -164,8 +165,18 @@ router.post("/generate-nda", requireAuth, async (req: AuthRequest, res) => {
     const milestones = await Milestone.find({ roomId });
     const milestoneList = milestones.map((m) => `• ${m.title}`).join("\n  ");
 
+    const saveNda = async (content: string) => {
+      return Nda.findOneAndUpdate(
+        { roomId },
+        { content, status: "draft", signedBy: [] },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    };
+
     if (!isOpenAiEnabled) {
-      res.json({ content: mockNda(room.title, business?.name ?? "Business", talentNames, milestoneList) });
+      const content = mockNda(room.title, business?.name ?? "Business", talentNames, milestoneList);
+      const saved = await saveNda(content);
+      res.json({ _id: saved._id, roomId: saved.roomId, content: saved.content, signedBy: saved.signedBy, status: saved.status, createdAt: saved.createdAt });
       return;
     }
 
@@ -195,11 +206,23 @@ Date: ${new Date().toLocaleDateString()}`;
     });
 
     const content = completion.choices[0]?.message?.content ?? "";
-    res.json({ content });
+    const saved = await saveNda(content);
+    res.json({ _id: saved._id, roomId: saved.roomId, content: saved.content, signedBy: saved.signedBy, status: saved.status, createdAt: saved.createdAt });
   } catch (err) {
     req.log.error({ err }, "generateNda error — falling back to mock");
-    const room = await LiveRoom.findById(roomId).catch(() => null);
-    res.json({ content: mockNda(room?.title ?? "Project", "Business", "", "") });
+    try {
+      const room = await LiveRoom.findById(roomId);
+      const content = mockNda(room?.title ?? "Project", "Business", "", "");
+      const saved = await Nda.findOneAndUpdate(
+        { roomId },
+        { content, status: "draft", signedBy: [] },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      res.json({ _id: saved._id, roomId: saved.roomId, content: saved.content, signedBy: saved.signedBy, status: saved.status, createdAt: saved.createdAt });
+    } catch (fallbackErr) {
+      req.log.error({ fallbackErr }, "generateNda fallback also failed");
+      res.status(500).json({ error: "Failed to generate NDA. Please try again." });
+    }
   }
 });
 

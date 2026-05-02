@@ -101,7 +101,12 @@ export default function LiveRoom() {
     mutation: { onSuccess: () => refetchNda() },
   });
   const generateNda = useGenerateNda({
-    mutation: { onSuccess: () => refetchNda() },
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getGetRoomNdaQueryKey(roomId) });
+        refetchNda();
+      },
+    },
   });
   const assembleSquad = useAssembleSquad({
     mutation: { onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }) },
@@ -526,38 +531,135 @@ export default function LiveRoom() {
             {/* NDA */}
             {tab === "nda" && (
               <div className="space-y-4 max-w-2xl">
-                {!nda ? (
-                  <div className="rounded-xl border border-dashed border-border/50 p-8 text-center">
-                    <p className="text-sm text-muted-foreground mb-4">No NDA generated yet</p>
-                    {isOwner && (
+                {/* Generation loading state */}
+                {generateNda.isPending && (
+                  <div className="rounded-xl border border-primary/20 bg-primary/5 p-8 text-center space-y-3">
+                    <div className="flex justify-center">
+                      <div className="w-6 h-6 rounded-full border-2 border-primary/40 border-t-primary animate-spin" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">Generating NDA document...</p>
+                    <p className="text-xs text-muted-foreground/50">This may take a moment</p>
+                  </div>
+                )}
+
+                {/* Generation error state */}
+                {generateNda.isError && !generateNda.isPending && !nda && (
+                  <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5">
+                    <div className="flex items-start gap-3">
+                      <div className="w-5 h-5 rounded-full bg-destructive/20 border border-destructive/40 flex items-center justify-center shrink-0 mt-0.5">
+                        <span className="text-destructive text-[10px] font-bold">!</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-destructive">NDA generation failed</p>
+                        <p className="text-xs text-destructive/70 mt-1">
+                          {(generateNda.error as any)?.data?.error ?? (generateNda.error as any)?.message ?? "Something went wrong. Please try again."}
+                        </p>
+                        {isOwner && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-3 border-destructive/40 text-destructive hover:bg-destructive/10"
+                            onClick={() => generateNda.mutate({ data: { roomId } })}
+                          >
+                            Try Again
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Sign error */}
+                {signNda.isError && (
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-xs text-destructive">
+                    Failed to sign NDA: {(signNda.error as any)?.data?.error ?? "Please try again."}
+                  </div>
+                )}
+
+                {/* Empty state — no NDA, no pending, no error */}
+                {!nda && !generateNda.isPending && !generateNda.isError && (
+                  <div className="rounded-xl border border-dashed border-border/50 p-8 text-center space-y-3">
+                    <div className="text-sm font-medium text-foreground/70">No NDA generated yet</div>
+                    <p className="text-xs text-muted-foreground leading-relaxed max-w-xs mx-auto">
+                      Generate a professional NDA covering confidentiality, IP rights, milestone payments, and dispute resolution.
+                    </p>
+                    {isOwner ? (
                       <Button
                         size="sm"
                         onClick={() => generateNda.mutate({ data: { roomId } })}
                         disabled={generateNda.isPending}
                       >
-                        {generateNda.isPending ? "Generating..." : "Generate NDA"}
+                        Generate NDA
                       </Button>
+                    ) : (
+                      <p className="text-xs text-muted-foreground/50">The room owner will generate the NDA</p>
                     )}
                   </div>
-                ) : (
+                )}
+
+                {/* NDA document */}
+                {nda && !generateNda.isPending && (
                   <>
-                    <div className="flex items-center justify-between">
-                      <StatusBadge status={nda.status === "signed" ? "verified" : nda.status === "pending_signatures" ? "disputed" : "revoked"} />
-                      <div className="text-xs text-muted-foreground">{nda.signedBy?.length ?? 0} signatures</div>
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-3">
+                        <StatusBadge
+                          status={
+                            nda.status === "signed" ? "verified"
+                            : nda.status === "pending_signatures" ? "disputed"
+                            : "revoked"
+                          }
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          {nda.status === "signed"
+                            ? "Fully signed"
+                            : nda.status === "pending_signatures"
+                            ? `${nda.signedBy?.length ?? 0} of 2 signatures`
+                            : "Draft — awaiting signatures"}
+                        </span>
+                      </div>
+                      {isOwner && nda.status === "draft" && (
+                        <button
+                          onClick={() => generateNda.mutate({ data: { roomId } })}
+                          className="text-xs text-muted-foreground hover:text-primary transition-colors"
+                        >
+                          Regenerate
+                        </button>
+                      )}
                     </div>
-                    <div className="rounded-xl border border-border/50 bg-card/50 p-5 max-h-72 overflow-y-auto">
+
+                    <div className="rounded-xl border border-border/50 bg-card/50 p-5 max-h-80 overflow-y-auto">
                       <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed">
                         {nda.content}
                       </pre>
                     </div>
-                    {!isSignedByMe && nda.status !== "signed" && (
-                      <Button className="w-full" onClick={() => signNda.mutate({ id: roomId })} disabled={signNda.isPending}>
-                        Sign NDA
-                      </Button>
+
+                    {nda.status !== "signed" && (
+                      isSignedByMe ? (
+                        <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-4 py-3 text-center">
+                          <span className="text-xs text-emerald-400 font-medium">You have signed this NDA ✓</span>
+                          {nda.status === "pending_signatures" && (
+                            <p className="text-[11px] text-emerald-400/60 mt-0.5">Waiting for other parties to sign</p>
+                          )}
+                        </div>
+                      ) : (
+                        <Button
+                          className="w-full"
+                          onClick={() => signNda.mutate({ id: roomId })}
+                          disabled={signNda.isPending}
+                        >
+                          {signNda.isPending ? (
+                            <span className="flex items-center gap-2">
+                              <span className="w-3 h-3 rounded-full border border-white/40 border-t-white animate-spin" />
+                              Signing...
+                            </span>
+                          ) : "Sign NDA"}
+                        </Button>
+                      )
                     )}
-                    {isSignedByMe && (
-                      <div className="text-center text-xs text-emerald-400 font-medium py-2">
-                        You have signed this NDA ✓
+
+                    {nda.status === "signed" && (
+                      <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-4 py-3 text-center">
+                        <span className="text-xs text-emerald-400 font-semibold">NDA fully signed — room is now contracted ✓</span>
                       </div>
                     )}
                   </>
