@@ -1,12 +1,14 @@
-import app from "./app";
-import { logger } from "./lib/logger";
+import { createServer } from "http";
+import { Server as SocketIOServer } from "socket.io";
+import app from "./app.js";
+import { logger } from "./lib/logger.js";
+import { connectMongoDB } from "./lib/mongodb.js";
+import { setupSocket } from "./socket.js";
 
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
+  throw new Error("PORT environment variable is required but was not provided.");
 }
 
 const port = Number(rawPort);
@@ -15,11 +17,29 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
-    process.exit(1);
-  }
+const server = createServer(app);
 
-  logger.info({ port }, "Server listening");
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
+setupSocket(io);
+
+connectMongoDB()
+  .then(() => {
+    server.listen(port, () => {
+      logger.info({ port }, "Server listening");
+    });
+  })
+  .catch((err) => {
+    logger.error({ err }, "Failed to start server");
+    process.exit(1);
+  });
+
+server.on("error", (err) => {
+  logger.error({ err }, "Server error");
+  process.exit(1);
 });
