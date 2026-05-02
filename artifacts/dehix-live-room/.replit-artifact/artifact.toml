@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "DEHIX Live Room"
+version = "1.0.0"
+id = "artifacts/dehix-live-room"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24184
+
+[services.development]
+run = "pnpm --filter @workspace/dehix-live-room run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/dehix-live-room", "run", "build" ]
+publicDir = "artifacts/dehix-live-room/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24184"
+BASE_PATH = "/"

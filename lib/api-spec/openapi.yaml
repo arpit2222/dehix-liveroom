@@ -1,22 +1,27 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: DEHIX Live Room API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: auth
+  - name: rooms
+  - name: ai
+  - name: talent
+  - name: tickets
+  - name: milestones
+  - name: nda
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +29,1173 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # ── Auth ──────────────────────────────────────────────
+  /auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterBody"
+      responses:
+        "201":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ── Rooms ─────────────────────────────────────────────
+  /rooms:
+    post:
+      operationId: createRoom
+      tags: [rooms]
+      summary: Create room and trigger AI scoping
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoomBody"
+      responses:
+        "201":
+          description: Room created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+
+  /rooms/my:
+    get:
+      operationId: getMyRooms
+      tags: [rooms]
+      summary: Get rooms for current user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of rooms
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Room"
+
+  /rooms/{id}:
+    get:
+      operationId: getRoom
+      tags: [rooms]
+      summary: Get full room data
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Room data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /rooms/{id}/participants:
+    get:
+      operationId: getRoomParticipants
+      tags: [rooms]
+      summary: Get room participants
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Participants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Participant"
+
+  /rooms/{id}/invite:
+    post:
+      operationId: inviteTalent
+      tags: [rooms]
+      summary: Invite matched talent to room
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InviteBody"
+      responses:
+        "200":
+          description: Invited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /rooms/{id}/assemble:
+    post:
+      operationId: assembleSquad
+      tags: [rooms]
+      summary: Form squad and trigger NDA
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Squad assembled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+
+  /rooms/{id}/close:
+    post:
+      operationId: closeRoom
+      tags: [rooms]
+      summary: Close a room
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Room closed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  # ── AI ────────────────────────────────────────────────
+  /ai/scope:
+    post:
+      operationId: scopeProject
+      tags: [ai]
+      summary: Parse description into brief + roles + tickets
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScopeBody"
+      responses:
+        "200":
+          description: Scoped brief
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScopedBrief"
+
+  /ai/match:
+    post:
+      operationId: matchTalent
+      tags: [ai]
+      summary: Vector search for talent by role
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MatchBody"
+      responses:
+        "200":
+          description: Matched talent
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TalentMatch"
+
+  /ai/generate-nda:
+    post:
+      operationId: generateNda
+      tags: [ai]
+      summary: Generate NDA from room data
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateNdaBody"
+      responses:
+        "200":
+          description: Generated NDA
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NdaContent"
+
+  /ai/suggest-milestones:
+    post:
+      operationId: suggestMilestones
+      tags: [ai]
+      summary: Generate milestone and escrow breakdown
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuggestMilestonesBody"
+      responses:
+        "200":
+          description: Suggested milestones
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Milestone"
+
+  /ai/chat:
+    post:
+      operationId: aiChat
+      tags: [ai]
+      summary: Live Room AI assistant
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiChatBody"
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiChatResponse"
+
+  # ── Talent ────────────────────────────────────────────
+  /talent/profile/{id}:
+    get:
+      operationId: getTalentProfile
+      tags: [talent]
+      summary: Get talent public profile
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Talent profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TalentProfile"
+
+  /talent/credentials/{id}:
+    get:
+      operationId: getTalentCredentials
+      tags: [talent]
+      summary: Get talent SBT credentials
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Credentials
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SbtCredential"
+
+  /talent/availability:
+    put:
+      operationId: updateAvailability
+      tags: [talent]
+      summary: Toggle talent availability
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /talent/invites:
+    get:
+      operationId: getTalentInvites
+      tags: [talent]
+      summary: Get pending invites for current talent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Invites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Invite"
+
+  /talent/respond-invite:
+    post:
+      operationId: respondInvite
+      tags: [talent]
+      summary: Accept or decline room invite
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RespondInviteBody"
+      responses:
+        "200":
+          description: Response recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  # ── Tickets ───────────────────────────────────────────
+  /rooms/{id}/tickets:
+    get:
+      operationId: getRoomTickets
+      tags: [tickets]
+      summary: Get all tickets for a room
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tickets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Ticket"
+    post:
+      operationId: createTicket
+      tags: [tickets]
+      summary: Create a ticket
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTicketBody"
+      responses:
+        "201":
+          description: Ticket created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ticket"
+
+  /tickets/{id}:
+    put:
+      operationId: updateTicket
+      tags: [tickets]
+      summary: Update a ticket
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTicketBody"
+      responses:
+        "200":
+          description: Updated ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ticket"
+
+  # ── Milestones ────────────────────────────────────────
+  /rooms/{id}/milestones:
+    get:
+      operationId: getRoomMilestones
+      tags: [milestones]
+      summary: Get milestones for a room
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Milestones
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Milestone"
+    post:
+      operationId: createMilestone
+      tags: [milestones]
+      summary: Create a milestone
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMilestoneBody"
+      responses:
+        "201":
+          description: Milestone created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Milestone"
+
+  # ── NDA ───────────────────────────────────────────────
+  /rooms/{id}/nda:
+    get:
+      operationId: getRoomNda
+      tags: [nda]
+      summary: Get NDA for a room
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: NDA
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Nda"
+
+  /rooms/{id}/nda/sign:
+    post:
+      operationId: signNda
+      tags: [nda]
+      summary: Sign NDA
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Signed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Nda"
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
         status:
           type: string
-      required:
-        - status
 
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    MessageResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+
+    # ── Auth ────────────────────────────────────────────
+    RegisterBody:
+      type: object
+      required: [email, password, name, role]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 6
+        name:
+          type: string
+        role:
+          type: string
+          enum: [talent, business]
+        walletAddress:
+          type: string
+
+    LoginBody:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    AuthResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+
+    User:
+      type: object
+      required: [_id, email, name, role]
+      properties:
+        _id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [talent, business]
+        avatarUrl:
+          type: string
+          nullable: true
+        walletAddress:
+          type: string
+          nullable: true
+        isOnline:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    # ── Rooms ───────────────────────────────────────────
+    CreateRoomBody:
+      type: object
+      required: [title, rawDescription]
+      properties:
+        title:
+          type: string
+        rawDescription:
+          type: string
+
+    Room:
+      type: object
+      required: [_id, roomCode, title, status]
+      properties:
+        _id:
+          type: string
+        roomCode:
+          type: string
+        title:
+          type: string
+        rawDescription:
+          type: string
+        aiScopedBrief:
+          $ref: "#/components/schemas/ScopedBrief"
+          nullable: true
+        status:
+          type: string
+          enum: [scoping, matching, open, assembling, contracted, closed]
+        meetLink:
+          type: string
+          nullable: true
+        businessId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        contractedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    RoomDetail:
+      allOf:
+        - $ref: "#/components/schemas/Room"
+        - type: object
+          properties:
+            roles:
+              type: array
+              items:
+                $ref: "#/components/schemas/RoomRole"
+            participants:
+              type: array
+              items:
+                $ref: "#/components/schemas/Participant"
+            tickets:
+              type: array
+              items:
+                $ref: "#/components/schemas/Ticket"
+            milestones:
+              type: array
+              items:
+                $ref: "#/components/schemas/Milestone"
+            nda:
+              $ref: "#/components/schemas/Nda"
+              nullable: true
+
+    RoomRole:
+      type: object
+      required: [_id, roleTitle, skillDomain, status]
+      properties:
+        _id:
+          type: string
+        roleTitle:
+          type: string
+        skillDomain:
+          type: string
+        requiredLevel:
+          type: integer
+        minReputation:
+          type: integer
+        filledBy:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [open, invited, accepted, filled]
+
+    Participant:
+      type: object
+      required: [_id, userId, status]
+      properties:
+        _id:
+          type: string
+        userId:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+          nullable: true
+        roleId:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [invited, joined, accepted, declined]
+        joinedAt:
+          type: string
+          format: date-time
+
+    InviteBody:
+      type: object
+      required: [talentId, roleId]
+      properties:
+        talentId:
+          type: string
+        roleId:
+          type: string
+
+    # ── AI ──────────────────────────────────────────────
+    ScopeBody:
+      type: object
+      required: [description]
+      properties:
+        description:
+          type: string
+
+    ScopedBrief:
+      type: object
+      properties:
+        projectTitle:
+          type: string
+        projectSummary:
+          type: string
+        estimatedWeeks:
+          type: integer
+        complexity:
+          type: string
+          enum: [low, medium, high, very_high]
+        roles:
+          type: array
+          items:
+            type: object
+            properties:
+              roleTitle:
+                type: string
+              skillDomain:
+                type: string
+              requiredLevel:
+                type: integer
+              minReputation:
+                type: integer
+              responsibilities:
+                type: array
+                items:
+                  type: string
+              estimatedHours:
+                type: integer
+        milestones:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              description:
+                type: string
+              durationWeeks:
+                type: integer
+              percentageOfBudget:
+                type: number
+        tickets:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              description:
+                type: string
+              milestoneNumber:
+                type: integer
+              roleTitle:
+                type: string
+              estimatedHours:
+                type: integer
+        technicalRisks:
+          type: array
+          items:
+            type: string
+        suggestedTotalBudgetUsd:
+          type: number
+
+    MatchBody:
+      type: object
+      required: [roleTitle, skillDomain]
+      properties:
+        roleTitle:
+          type: string
+        skillDomain:
+          type: string
+        requiredLevel:
+          type: integer
+        minReputation:
+          type: integer
+
+    TalentMatch:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        credential:
+          $ref: "#/components/schemas/SbtCredential"
+        similarityScore:
+          type: number
+
+    GenerateNdaBody:
+      type: object
+      required: [roomId]
+      properties:
+        roomId:
+          type: string
+
+    NdaContent:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+
+    SuggestMilestonesBody:
+      type: object
+      required: [roomId]
+      properties:
+        roomId:
+          type: string
+        totalBudgetUsd:
+          type: number
+
+    AiChatBody:
+      type: object
+      required: [message, roomId]
+      properties:
+        message:
+          type: string
+        roomId:
+          type: string
+
+    AiChatResponse:
+      type: object
+      required: [reply]
+      properties:
+        reply:
+          type: string
+
+    # ── Talent ──────────────────────────────────────────
+    SbtCredential:
+      type: object
+      required: [_id, skillDomain, level, reputationScore, status]
+      properties:
+        _id:
+          type: string
+        userId:
+          type: string
+        skillDomain:
+          type: string
+        level:
+          type: integer
+        reputationScore:
+          type: integer
+        status:
+          type: string
+          enum: [verified, disputed, revoked]
+        githubScore:
+          type: integer
+        interviewScore:
+          type: integer
+        projectsCompleted:
+          type: integer
+        onChainTx:
+          type: string
+          nullable: true
+        issuedAt:
+          type: string
+          format: date-time
+
+    TalentProfile:
+      type: object
+      required: [user, credentials]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        credentials:
+          type: array
+          items:
+            $ref: "#/components/schemas/SbtCredential"
+        overallReputation:
+          type: integer
+
+    AvailabilityBody:
+      type: object
+      required: [isOnline]
+      properties:
+        isOnline:
+          type: boolean
+
+    Invite:
+      type: object
+      required: [_id, roomId, roleId, status]
+      properties:
+        _id:
+          type: string
+        roomId:
+          type: string
+        room:
+          $ref: "#/components/schemas/Room"
+          nullable: true
+        roleId:
+          type: string
+        role:
+          $ref: "#/components/schemas/RoomRole"
+          nullable: true
+        status:
+          type: string
+          enum: [invited, joined, accepted, declined]
+        joinedAt:
+          type: string
+          format: date-time
+
+    RespondInviteBody:
+      type: object
+      required: [participantId, action]
+      properties:
+        participantId:
+          type: string
+        action:
+          type: string
+          enum: [accept, decline]
+
+    # ── Tickets ─────────────────────────────────────────
+    Ticket:
+      type: object
+      required: [_id, roomId, title, status]
+      properties:
+        _id:
+          type: string
+        roomId:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        assignedRole:
+          type: string
+          nullable: true
+        milestoneNumber:
+          type: integer
+        estimatedHours:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [backlog, todo, in_progress, done]
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateTicketBody:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        assignedRole:
+          type: string
+        milestoneNumber:
+          type: integer
+        estimatedHours:
+          type: integer
+
+    UpdateTicketBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [backlog, todo, in_progress, done]
+        assignedRole:
+          type: string
+        estimatedHours:
+          type: integer
+
+    # ── Milestones ──────────────────────────────────────
+    Milestone:
+      type: object
+      required: [_id, roomId, title, status]
+      properties:
+        _id:
+          type: string
+        roomId:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        amountUsd:
+          type: number
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+        status:
+          type: string
+          enum: [pending, in_progress, submitted, approved, released]
+
+    CreateMilestoneBody:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        amountUsd:
+          type: number
+        dueDate:
+          type: string
+          format: date
+
+    # ── NDA ─────────────────────────────────────────────
+    Nda:
+      type: object
+      required: [_id, roomId, content, status]
+      properties:
+        _id:
+          type: string
+        roomId:
+          type: string
+        content:
+          type: string
+        signedBy:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [draft, pending_signatures, signed]
+        createdAt:
+          type: string
+          format: date-time
