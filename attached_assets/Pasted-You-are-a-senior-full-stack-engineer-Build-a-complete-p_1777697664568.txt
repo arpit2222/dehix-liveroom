@@ -1,0 +1,621 @@
+You are a senior full-stack engineer. Build a complete, 
+production-ready web application called DEHIX Live Room.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRODUCT OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DEHIX Live Room is a real-time AI-powered hiring session 
+where a business goes from a raw project idea to a fully 
+assembled, contracted Web3 team in a single sitting — 
+under 60 minutes.
+
+The core flow:
+1. Business enters a raw project description in plain text
+2. AI scopes it into structured roles, tickets, milestones
+3. AI matches verified available talent in real time
+4. Talent joins the Live Room (video + chat)
+5. Business reviews verified credentials, asks questions
+6. One click assembles the squad + generates NDA + opens 
+   project board
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TECH STACK — USE EXACTLY THIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Frontend:    Next.js 14 (App Router) + TypeScript
+Styling:     Tailwind CSS + shadcn/ui
+Real-time:   Socket.io (live data sync)
+Video/Audio: Daily.co SDK (WebRTC — free tier)
+Backend:     Node.js + Express (API server)
+Database:    Supabase (PostgreSQL + Realtime)
+AI:          OpenAI API (GPT-4o for scoping + embeddings)
+Vector DB:   Supabase pgvector (talent matching)
+Auth:        Supabase Auth (email + wallet connect)
+Deployment:  Ready for Vercel (frontend) + Railway (backend)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BRAND & DESIGN SYSTEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Design philosophy: Dark mode, premium, Web3-native.
+Like Linear.app meets Etherscan. Serious infrastructure, 
+not a marketplace.
+
+Colors:
+  --purple:       #5B21B6  (primary)
+  --purple-dark:  #3B0764  (backgrounds)
+  --purple-mid:   #7C3AED  (accents)
+  --purple-light: #A78BFA  (highlights)
+  --purple-pale:  #EDE9FE  (light backgrounds)
+  --dark:         #1E1033  (main background)
+  --accent:       #C4B5FD  (text on dark)
+  --white:        #FFFFFF
+
+Typography:
+  Headlines: font-black, tight tracking
+  Body: font-normal, relaxed line-height
+  Code/addresses: font-mono (JetBrains Mono or Fira Code)
+
+Component style:
+  - Dark cards with purple border glow (box-shadow: 0 0 20px 
+    rgba(91,33,182,0.3))
+  - Glassmorphism panels (backdrop-blur + bg-opacity)
+  - Rounded corners (rounded-xl)
+  - Subtle gradients (from-purple-900 to-slate-900)
+  - Green for verified (✓), red for revoked (✗), 
+    amber for disputed (⚠)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DATABASE SCHEMA — BUILD EXACTLY THIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+-- Users (both talent and businesses)
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email TEXT UNIQUE NOT NULL,
+  role TEXT CHECK (role IN ('talent','business')) NOT NULL,
+  name TEXT NOT NULL,
+  avatar_url TEXT,
+  wallet_address TEXT UNIQUE,
+  is_online BOOLEAN DEFAULT false,
+  last_seen TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- SBT Credentials (Soulbound Token records)
+CREATE TABLE sbt_credentials (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  skill_domain TEXT NOT NULL,
+  level INTEGER CHECK (level IN (1,2)) NOT NULL,
+  reputation_score INTEGER DEFAULT 0 CHECK 
+    (reputation_score BETWEEN 0 AND 1000),
+  status TEXT CHECK (status IN 
+    ('verified','disputed','revoked')) DEFAULT 'verified',
+  github_score INTEGER DEFAULT 0,
+  interview_score INTEGER DEFAULT 0,
+  projects_completed INTEGER DEFAULT 0,
+  on_chain_tx TEXT,
+  issued_at TIMESTAMPTZ DEFAULT NOW(),
+  embedding vector(1536)  -- for pgvector matching
+);
+
+-- Live Rooms
+CREATE TABLE live_rooms (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_code TEXT UNIQUE NOT NULL,
+  business_id UUID REFERENCES users(id),
+  title TEXT NOT NULL,
+  raw_description TEXT NOT NULL,
+  ai_scoped_brief JSONB,
+  status TEXT CHECK (status IN (
+    'scoping','matching','open',
+    'assembling','contracted','closed'
+  )) DEFAULT 'scoping',
+  daily_room_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  contracted_at TIMESTAMPTZ
+);
+
+-- Room Roles (AI-generated required roles)
+CREATE TABLE room_roles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id UUID REFERENCES live_rooms(id),
+  role_title TEXT NOT NULL,
+  skill_domain TEXT NOT NULL,
+  required_level INTEGER DEFAULT 1,
+  min_reputation INTEGER DEFAULT 0,
+  filled_by UUID REFERENCES users(id),
+  status TEXT CHECK (status IN (
+    'open','invited','accepted','filled'
+  )) DEFAULT 'open'
+);
+
+-- Room Participants (talent in the room)
+CREATE TABLE room_participants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id UUID REFERENCES live_rooms(id),
+  user_id UUID REFERENCES users(id),
+  role_id UUID REFERENCES room_roles(id),
+  joined_at TIMESTAMPTZ DEFAULT NOW(),
+  status TEXT CHECK (status IN (
+    'invited','joined','accepted','declined'
+  )) DEFAULT 'invited'
+);
+
+-- Tickets (AI-generated project tasks)
+CREATE TABLE tickets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id UUID REFERENCES live_rooms(id),
+  title TEXT NOT NULL,
+  description TEXT,
+  assigned_role UUID REFERENCES room_roles(id),
+  milestone_number INTEGER DEFAULT 1,
+  estimated_hours INTEGER,
+  status TEXT CHECK (status IN (
+    'backlog','todo','in_progress','done'
+  )) DEFAULT 'backlog',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Milestones + Escrow
+CREATE TABLE milestones (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id UUID REFERENCES live_rooms(id),
+  title TEXT NOT NULL,
+  description TEXT,
+  amount_usd NUMERIC(10,2),
+  due_date DATE,
+  status TEXT CHECK (status IN (
+    'pending','in_progress','submitted',
+    'approved','released'
+  )) DEFAULT 'pending'
+);
+
+-- Chat Messages
+CREATE TABLE chat_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id UUID REFERENCES live_rooms(id),
+  user_id UUID REFERENCES users(id),
+  message TEXT NOT NULL,
+  is_ai BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- NDA Records
+CREATE TABLE ndas (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id UUID REFERENCES live_rooms(id),
+  content TEXT NOT NULL,
+  signed_by UUID[] DEFAULT '{}',
+  status TEXT CHECK (status IN (
+    'draft','pending_signatures','signed'
+  )) DEFAULT 'draft',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+API ENDPOINTS — BUILD ALL OF THESE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Auth
+POST   /api/auth/register
+POST   /api/auth/login
+POST   /api/auth/logout
+
+// Live Room
+POST   /api/rooms/create          — create room + trigger AI scoping
+GET    /api/rooms/:id             — get full room data
+GET    /api/rooms/:id/participants
+POST   /api/rooms/:id/invite      — invite matched talent
+POST   /api/rooms/:id/assemble    — form squad + trigger NDA
+POST   /api/rooms/:id/close
+
+// AI Endpoints
+POST   /api/ai/scope              — parse description → brief+roles+tickets
+POST   /api/ai/match              — vector search for talent by role
+POST   /api/ai/generate-nda       — generate NDA from room data
+POST   /api/ai/suggest-milestones — generate milestone + escrow breakdown
+POST   /api/ai/chat               — Live Room AI assistant
+
+// Talent
+GET    /api/talent/profile/:id
+GET    /api/talent/credentials/:id
+PUT    /api/talent/availability
+POST   /api/talent/respond-invite — accept or decline room invite
+
+// Tickets
+GET    /api/rooms/:id/tickets
+POST   /api/rooms/:id/tickets
+PUT    /api/tickets/:id
+
+// Milestones
+GET    /api/rooms/:id/milestones
+POST   /api/rooms/:id/milestones
+
+// NDA
+GET    /api/rooms/:id/nda
+POST   /api/rooms/:id/nda/sign
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AI PROMPTS — IMPLEMENT EXACTLY THESE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// 1. PROJECT SCOPING PROMPT
+// POST /api/ai/scope
+// Input: { description: string }
+// Output: JSON with roles, tickets, milestones
+
+const SCOPING_PROMPT = `
+You are a senior Web3 project manager. A client has described 
+a project. Extract and return ONLY valid JSON — no markdown, 
+no explanation.
+
+Client description: {description}
+
+Return this exact JSON structure:
+{
+  "project_title": "string",
+  "project_summary": "string (2 sentences max)",
+  "estimated_weeks": number,
+  "complexity": "low|medium|high|very_high",
+  "roles": [
+    {
+      "role_title": "string",
+      "skill_domain": "string",
+      "required_level": 1 or 2,
+      "min_reputation": number (0-1000),
+      "responsibilities": ["string"],
+      "estimated_hours": number
+    }
+  ],
+  "milestones": [
+    {
+      "title": "string",
+      "description": "string",
+      "duration_weeks": number,
+      "percentage_of_budget": number
+    }
+  ],
+  "tickets": [
+    {
+      "title": "string",
+      "description": "string",
+      "milestone_number": number,
+      "role_title": "string",
+      "estimated_hours": number
+    }
+  ],
+  "technical_risks": ["string"],
+  "suggested_total_budget_usd": number
+}
+`;
+
+// 2. NDA GENERATION PROMPT
+// POST /api/ai/generate-nda
+// Input: { room_id, business_name, talent_names[], 
+//          project_title, milestones[] }
+
+const NDA_PROMPT = `
+Generate a professional Web3 freelance NDA and project 
+agreement. Return plain text only — no markdown.
+
+Include these sections:
+1. Parties (business + all talent members)
+2. Project scope (title + summary)
+3. Confidentiality obligations (mutual, 2 years)
+4. Intellectual property (all code belongs to client 
+   upon full payment)
+5. Payment terms (milestone-based escrow)
+6. Dispute resolution (DEHIX oracle arbitration)
+7. Governing law (mention blockchain-native jurisdiction)
+8. Signatures section (list all parties)
+
+Details:
+Business: {business_name}
+Talent: {talent_names}
+Project: {project_title}
+Milestones: {milestones}
+Date: {date}
+`;
+
+// 3. AI ASSISTANT PROMPT
+// POST /api/ai/chat
+// Input: { message, room_context }
+
+const ASSISTANT_PROMPT = `
+You are the DEHIX Live Room AI assistant. You are helping 
+a business and their potential Web3 development squad 
+collaborate on a project in real time.
+
+Current room context:
+- Project: {project_title}
+- Roles needed: {roles}
+- Talent present: {talent_names_and_skills}
+- Tickets created: {ticket_count}
+- Milestones: {milestones}
+
+You can help with:
+- Answering questions about the project scope
+- Suggesting how to split tickets or milestones
+- Providing Web3 market rate estimates for roles
+- Clarifying technical requirements
+- Suggesting risk mitigations for smart contract work
+
+Be concise, direct, and technically accurate.
+Current message: {message}
+`;
+
+// 4. TALENT MATCHING — VECTOR SEARCH
+// POST /api/ai/match
+// Input: { role_title, skill_domain, required_level, 
+//           min_reputation }
+// 
+// Implementation:
+// 1. Generate embedding of role description using 
+//    text-embedding-3-small
+// 2. Query pgvector for nearest neighbours from 
+//    sbt_credentials.embedding
+// 3. Filter by: level >= required_level, 
+//    reputation_score >= min_reputation,
+//    users.is_online = true,
+//    status = 'verified'
+// 4. Return top 5 matches with similarity score
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PAGES & SCREENS — BUILD ALL OF THESE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// app/page.tsx — Landing Page
+- Hero: "From idea to squad in 60 minutes"
+- Tagline: DEHIX Live Room
+- Two CTAs: "Open a Live Room" (business) | 
+  "Join as Talent" (developer)
+- How it works: 6 steps with icons
+- Dark theme, purple gradients
+
+// app/room/create/page.tsx — Create Room
+- Large textarea: "Describe your project in plain English"
+- Example placeholder text
+- "Scope with AI" button (primary CTA)
+- Loading state: "AI is analysing your project..."
+- Shows live token count
+
+// app/room/[id]/page.tsx — THE MAIN LIVE ROOM
+This is the most important screen. Build it with 
+these panels:
+
+LEFT PANEL (280px):
+  - Room title + status badge
+  - Project summary (AI generated)
+  - Required roles list with fill status
+    Each role shows: title, skill domain, level badge,
+    reputation required, filled/open status
+  - Talent sidebar: list of joined participants
+    Each shows: avatar, name, skill domain, 
+    reputation score ring (0-1000), SBT level badge,
+    verified checkmark
+
+CENTER PANEL (flex-1):
+  - Tab bar: [Brief] [Tickets] [Milestones] [NDA]
+  
+  BRIEF TAB:
+    - AI-generated project summary card
+    - Technical risks callout (amber)
+    - Estimated timeline + budget
+    - Edit button (business only)
+
+  TICKETS TAB:
+    - Kanban board: Backlog | Todo | In Progress | Done
+    - Each ticket card shows: title, assigned role,
+      estimated hours, milestone number
+    - "+ Add ticket" button
+    - AI generate more tickets button
+
+  MILESTONES TAB:
+    - Timeline view of milestones
+    - Each milestone: title, duration, budget %, 
+      assigned tickets count
+    - Escrow amount calculator
+
+  NDA TAB:
+    - NDA text (scrollable)
+    - Signature status per party (signed/pending)
+    - "Sign NDA" button (with wallet connect)
+    - "Generate NDA" button (business only)
+
+RIGHT PANEL (320px):
+  - Video grid (Daily.co embed — 2x2 max)
+  - Mute / camera toggle buttons
+  - Chat panel below video
+    - Message list (auto scroll)
+    - AI messages styled differently (purple bg)
+    - Input box + send button
+    - "Ask AI" quick button
+
+BOTTOM BAR (business only, when all roles filled):
+  - "Form Squad & Sign NDA" button (large, purple)
+  - Shows: X roles filled, NDA status, escrow total
+
+// app/talent/dashboard/page.tsx — Talent Dashboard
+- Online/offline toggle (prominent)
+- Active room invitations (notification cards)
+  Each shows: project title, role needed, 
+  business name, reputation required, 
+  "Join Room" | "Decline" buttons
+- My SBT credentials grid
+  Each credential card shows: skill domain,
+  level badge, reputation score (ring chart),
+  status badge (verified/disputed/revoked),
+  projects completed, issued date
+- Activity feed
+
+// app/talent/profile/[id]/page.tsx — Public Profile
+- Header: name, avatar, wallet address (truncated)
+- Overall reputation score (large ring)
+- SBT credentials (verified badges)
+- Project history
+- Availability status
+
+// app/business/dashboard/page.tsx — Business Dashboard  
+- Active rooms list
+- Past squads history
+- Quick "New Live Room" CTA
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SOCKET.IO REAL-TIME EVENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Server emits these to room subscribers:
+'room:scoped'          — AI finished scoping
+'room:talent_matched'  — new talent matches found
+'room:participant_joined'
+'room:participant_left'
+'room:role_filled'
+'room:ticket_updated'
+'room:milestone_updated'
+'room:nda_signed'
+'room:squad_formed'
+'room:message'         — new chat message
+'room:ai_response'     — AI assistant reply
+'talent:invited'       — sent to specific talent
+
+// Client emits:
+'room:join'
+'room:leave'
+'message:send'
+'ticket:update'
+'nda:sign'
+'availability:toggle'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KEY COMPONENTS TO BUILD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<ReputationRing score={750} size="lg" />
+  — Circular progress ring, purple fill, score in center
+
+<SBTCredentialCard credential={...} />
+  — Dark card, skill domain, level badge, 
+    reputation ring, status indicator, 
+    purple glow on hover
+
+<RoleCard role={...} filled={boolean} />
+  — Shows role title, skill domain, level badge,
+    reputation min, filled/open status
+
+<TalentProfileCard user={...} />
+  — Avatar, name, top credential, 
+    reputation score, online indicator dot
+
+<TicketCard ticket={...} />
+  — Kanban card, role color tag, hours badge
+
+<StatusBadge status="verified|disputed|revoked" />
+  — Green ✓ / Amber ⚠ / Red ✗
+
+<OnlineIndicator isOnline={boolean} />
+  — Green pulsing dot when online
+
+<AIMessage message={string} />
+  — Purple background, bot icon, 
+    different from user messages
+
+<NDASignatureRow party={...} signed={boolean} />
+  — Party name, wallet address, signed/pending status
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEED DATA — CREATE THIS FOR DEMO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create 1 demo business account:
+  email: business@demo.com / password: demo123
+  name: Nexus Protocol
+  
+Create 5 demo talent accounts:
+  1. alex@demo.com / demo123
+     name: Alex Chen
+     skills: [Solidity L2 rep:850, DeFi L1 rep:720]
+     is_online: true
+
+  2. priya@demo.com / demo123
+     name: Priya Sharma  
+     skills: [React L2 rep:780, Web3Frontend L1 rep:650]
+     is_online: true
+
+  3. marco@demo.com / demo123
+     name: Marco Ferrari
+     skills: [SmartContractAudit L2 rep:920]
+     is_online: false
+
+  4. yuki@demo.com / demo123
+     name: Yuki Tanaka
+     skills: [Tokenomics L1 rep:690, DAO L1 rep:610]
+     is_online: true
+
+  5. sara@demo.com / demo123
+     name: Sara Mueller
+     skills: [ZKProofs L2 rep:870, Solidity L1 rep:750]
+     is_online: true
+
+Create 1 demo room in 'open' status with:
+  - AI scoped brief already generated
+  - 3 roles (Solidity Dev, Frontend, Auditor)
+  - 8 tickets across 3 milestones  
+  - Alex and Priya already joined
+  - Draft NDA generated
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENVIRONMENT VARIABLES NEEDED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+OPENAI_API_KEY=
+DAILY_API_KEY=
+NEXT_PUBLIC_SOCKET_URL=
+NEXT_PUBLIC_APP_URL=
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BUILD ORDER — FOLLOW THIS EXACTLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Supabase setup — schema + seed data + pgvector
+2. Auth — register, login, role-based routing
+3. AI scoping endpoint — /api/ai/scope (test first)
+4. Create Room page — description → AI scope → 
+   display brief + roles + tickets
+5. Talent matching — embeddings + vector search
+6. Socket.io server — room events
+7. Live Room page — main screen (no video yet)
+8. Real-time chat + AI assistant
+9. Daily.co video integration
+10. NDA generation + signature flow
+11. Squad formation + confirmation screen
+12. Talent dashboard + invitation system
+13. Polish: animations, loading states, 
+    error handling, mobile responsive
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DEFINITION OF DONE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The app is complete when:
+✓ Business can describe a project and get AI 
+  scoping in under 10 seconds
+✓ Talent matches appear automatically based on 
+  verified credentials
+✓ Multiple users can join a room and see each 
+  other in real time
+✓ Video and chat work simultaneously  
+✓ Tickets and milestones update live for all users
+✓ NDA can be generated and signed
+✓ Squad formation sends confirmation to all parties
+✓ Talent can toggle availability and receive 
+  instant room invitations
+✓ All screens work on mobile (375px min width)
+✓ Demo accounts work end to end with seed data
+
+Start with step 1 and confirm completion of each 
+step before moving to the next. Ask me if any 
+requirement is unclear before building.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
