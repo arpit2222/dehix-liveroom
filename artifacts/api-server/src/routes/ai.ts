@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { openai, isOpenAiEnabled } from "../lib/openai.js";
 import { mockScope, mockChat, mockNda, mockMilestones } from "../lib/mockAi.js";
+import { mockPitchDeck, mockTechnicalDeck, mockBdStrategy, mockSow, mockProjectBrief, type ConvMsg } from "../lib/mockDocs.js";
+import { GeneratedDoc } from "../models/GeneratedDoc.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
 import { RoomParticipant } from "../models/RoomParticipant.js";
@@ -279,6 +281,9 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
   const { message, roomId } = parsed.data;
+  const history: Array<{ role: "user" | "assistant"; content: string }> = Array.isArray(req.body.history)
+    ? req.body.history.slice(-15)
+    : [];
 
   if (!isOpenAiEnabled) {
     const room = await LiveRoom.findById(roomId).catch(() => null);
@@ -290,23 +295,36 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
     const room = await LiveRoom.findById(roomId);
     const brief = room?.aiScopedBrief as any;
 
-    const systemPrompt = `You are the DEHIX Live Room AI assistant helping a business and their Web3 development squad collaborate in real time.
+    const systemPrompt = `You are the DEHIX Live Room AI — an expert research assistant for Web3 product development.
 
-Current room context:
-- Project: ${room?.title ?? "Unknown"}
-- Summary: ${brief?.projectSummary ?? "No brief yet"}
+Project context:
+- Name: ${room?.title ?? "Unknown"}
+- Brief: ${brief?.projectSummary ?? "No brief yet"}
 - Status: ${room?.status ?? "unknown"}
+- Stack: ${brief?.recommendedStack ?? "Not specified"}
 
-You help with: project scope questions, ticket/milestone splitting, Web3 market rate estimates, technical requirements, risk mitigations.
-Be concise, direct, and technically accurate.`;
+You are deeply knowledgeable about:
+• Web3/blockchain architecture (DeFi, NFTs, DAOs, L1/L2s, smart contracts)
+• Product strategy and go-to-market for crypto/Web3 startups
+• Technical hiring, team structure, market rates for Web3 talent
+• Tokenomics, escrow mechanisms, on-chain credential systems
+• Project scoping, milestone planning, risk identification
+
+Be thorough and specific. When asked about costs, timelines, or market data, give concrete numbers and ranges.
+When asked about technical approaches, compare options with tradeoffs.
+Maintain context from earlier in the conversation.
+Format your response with clear structure when the answer is complex (use numbered points, bullet lists).`;
+
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: systemPrompt },
+      ...history,
+      { role: "user", content: message },
+    ];
 
     const completion = await openai.chat.completions.create({
       model: "gpt-5.2",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message },
-      ],
-      max_completion_tokens: 512,
+      messages,
+      max_completion_tokens: 1024,
     });
 
     const reply = completion.choices[0]?.message?.content ?? "I couldn't process that request.";
@@ -315,6 +333,97 @@ Be concise, direct, and technically accurate.`;
     req.log.error({ err }, "aiChat error — falling back to mock");
     const room = await LiveRoom.findById(roomId).catch(() => null);
     res.json({ reply: mockChat(message, room?.title ?? "your project") });
+  }
+});
+
+const DOC_TYPE_LABELS: Record<string, string> = {
+  pitch_deck: "Pitch Deck",
+  technical_deck: "Technical Deck",
+  bd_strategy: "BD Strategy",
+  sow: "Statement of Work",
+  project_brief: "Project Brief",
+};
+
+router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => {
+  const { messages, documentType, roomTitle = "Project", roomId } = req.body;
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    res.status(400).json({ error: "messages array is required and must not be empty" });
+    return;
+  }
+  if (!documentType || !DOC_TYPE_LABELS[documentType]) {
+    res.status(400).json({ error: `documentType must be one of: ${Object.keys(DOC_TYPE_LABELS).join(", ")}` });
+    return;
+  }
+
+  const convMsgs: ConvMsg[] = messages.map((m: any) => ({
+    userName: m.userName ?? "User",
+    message: m.message ?? "",
+    isAi: Boolean(m.isAi),
+  }));
+
+  const title = `${roomTitle} — ${DOC_TYPE_LABELS[documentType]}`;
+
+  let content: string;
+
+  if (!isOpenAiEnabled) {
+    switch (documentType) {
+      case "pitch_deck":      content = mockPitchDeck(convMsgs, roomTitle); break;
+      case "technical_deck":  content = mockTechnicalDeck(convMsgs, roomTitle); break;
+      case "bd_strategy":     content = mockBdStrategy(convMsgs, roomTitle); break;
+      case "sow":             content = mockSow(convMsgs, roomTitle); break;
+      case "project_brief":   content = mockProjectBrief(convMsgs, roomTitle); break;
+      default:                content = mockProjectBrief(convMsgs, roomTitle);
+    }
+  } else {
+    const conversationText = convMsgs
+      .map((m) => `${m.isAi ? "AI" : m.userName}: ${m.message}`)
+      .join("\n");
+
+    const systemPrompts: Record<string, string> = {
+      pitch_deck: `You are an expert startup pitch deck writer. Given a research conversation, generate a comprehensive, investor-ready pitch deck in plain text format. Include: Cover, Problem, Solution, Market Size (TAM/SAM/SOM with real numbers), Product, Business Model, Traction, Competitive Landscape, Team, Financials, and The Ask. Use ═══ and ─── dividers for sections. Be specific with numbers.`,
+      technical_deck: `You are a senior solutions architect. Generate a comprehensive technical deck from this research conversation. Include: Architecture overview (ASCII diagram), Tech Stack, Key Technical Decisions (with rationale and tradeoffs), Security Model, Scalability Plan, Data Models, API Design, Development Roadmap. Use ═══ and ─── dividers.`,
+      bd_strategy: `You are a go-to-market strategy expert. Generate a comprehensive BD strategy document from this research conversation. Include: Market Opportunity, Target Segments (with profiles and pain points), Value Proposition, Go-to-Market Strategy, Partnership Strategy, Revenue Model & Pricing, Sales Process, KPIs. Be specific with numbers and channels.`,
+      sow: `You are a contract specialist. Generate a detailed Statement of Work from this research conversation. Include: Project Overview, Scope of Work (in scope and out of scope), Deliverables with milestones, Timeline, Team Structure with rates, Assumptions & Dependencies, Change Management, Payment Schedule (milestone escrow), Acceptance Criteria, Signature blocks. Be legally precise.`,
+      project_brief: `You are a senior product manager. Generate a comprehensive project brief from this research conversation. Include: Executive Summary, Background & Context, Business Objectives, Functional Requirements (P0/P1/P2), Technical Requirements, Out of Scope, Success Criteria, Risk Register, and Stakeholders. Be thorough and specific.`,
+    };
+
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages: [
+          { role: "system", content: systemPrompts[documentType] ?? systemPrompts.project_brief },
+          { role: "user", content: `Here is the research conversation to base the document on:\n\n${conversationText}\n\nProject title: ${roomTitle}\n\nGenerate the full document now.` },
+        ],
+        max_completion_tokens: 3000,
+      });
+      content = completion.choices[0]?.message?.content ?? "";
+      if (!content) throw new Error("Empty response from AI");
+    } catch (err) {
+      req.log.error({ err }, "generate-document AI error — falling back to mock");
+      switch (documentType) {
+        case "pitch_deck":     content = mockPitchDeck(convMsgs, roomTitle); break;
+        case "technical_deck": content = mockTechnicalDeck(convMsgs, roomTitle); break;
+        case "bd_strategy":    content = mockBdStrategy(convMsgs, roomTitle); break;
+        case "sow":            content = mockSow(convMsgs, roomTitle); break;
+        default:               content = mockProjectBrief(convMsgs, roomTitle);
+      }
+    }
+  }
+
+  try {
+    const saved = await GeneratedDoc.create({
+      roomId: roomId ?? undefined,
+      documentType,
+      title,
+      content,
+      messageCount: convMsgs.length,
+      createdBy: req.userId,
+    });
+    res.json({ _id: saved._id, title: saved.title, documentType: saved.documentType, content: saved.content, messageCount: saved.messageCount });
+  } catch (err) {
+    req.log.error({ err }, "Failed to save GeneratedDoc — returning unsaved");
+    res.json({ title, documentType, content, messageCount: convMsgs.length });
   }
 });
 

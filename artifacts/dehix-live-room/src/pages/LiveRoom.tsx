@@ -8,13 +8,14 @@ import { db, isFirebaseEnabled } from "@/lib/firebase";
 import {
   useGetRoom, useGetRoomTickets, useGetRoomMilestones, useGetRoomNda,
   useCreateTicket, useUpdateTicket, useCreateMilestone, useSignNda, useGenerateNda,
-  useAiChat, useAssembleSquad,
+  useAssembleSquad,
   getGetRoomQueryKey, getGetRoomTicketsQueryKey, getGetRoomMilestonesQueryKey, getGetRoomNdaQueryKey
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { DocModal } from "@/components/DocModal";
 
 type TabKey = "brief" | "tickets" | "milestones" | "nda";
 
@@ -59,6 +60,15 @@ export default function LiveRoom() {
   const [newMilestoneAmount, setNewMilestoneAmount] = useState("");
   const socketRef = useRef<Socket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  const [aiLoading, setAiLoading] = useState(false);
+  const [docMode, setDocMode] = useState(false);
+  const [startIdx, setStartIdx] = useState<number | null>(null);
+  const [endIdx, setEndIdx] = useState<number | null>(null);
+  const [docType, setDocType] = useState("pitch_deck");
+  const [genDocLoading, setGenDocLoading] = useState(false);
+  const [genDocError, setGenDocError] = useState<string | null>(null);
+  const [generatedDoc, setGeneratedDoc] = useState<{ title: string; documentType: string; content: string; messageCount?: number } | null>(null);
 
   const roomId = id ?? "";
 
@@ -111,22 +121,65 @@ export default function LiveRoom() {
   const assembleSquad = useAssembleSquad({
     mutation: { onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }) },
   });
-  const aiChat = useAiChat({
-    mutation: {
-      onSuccess: async (data: any) => {
-        if (!data.reply) return;
-        const aiMsg = { userId: "ai", userName: "DEHIX AI", message: data.reply, isAi: true };
-        if (isFirebaseEnabled && db) {
-          await addDoc(collection(db, `liverooms/${roomId}/messages`), {
-            ...aiMsg,
-            createdAt: serverTimestamp(),
-          });
-        } else {
-          addLocalMessage(aiMsg);
-        }
-      },
-    },
-  });
+  const callAiChat = async (message: string, history: ChatMessage[]) => {
+    setAiLoading(true);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const historyPayload = history.slice(-15).map((m) => ({
+        role: m.isAi ? "assistant" : "user",
+        content: m.isAi ? m.message : `${m.userName}: ${m.message}`,
+      }));
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ message, roomId, history: historyPayload }),
+      });
+      const data = await res.json();
+      const reply = data.reply ?? "I couldn't process that.";
+      const aiMsg = { userId: "ai", userName: "DEHIX AI", message: reply, isAi: true };
+      if (isFirebaseEnabled && db) {
+        await addDoc(collection(db, `liverooms/${roomId}/messages`), { ...aiMsg, createdAt: serverTimestamp() });
+      } else {
+        addLocalMessage(aiMsg);
+      }
+    } catch {
+      addLocalMessage({ userId: "ai", userName: "DEHIX AI", message: "Sorry, I hit an error. Please try again.", isAi: true });
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleGenerateDoc = async () => {
+    if (startIdx === null || endIdx === null) return;
+    const lo = Math.min(startIdx, endIdx);
+    const hi = Math.max(startIdx, endIdx);
+    const selectedMessages = chatMessages.slice(lo, hi + 1);
+    setGenDocLoading(true);
+    setGenDocError(null);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const res = await fetch("/api/ai/generate-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          messages: selectedMessages.map((m) => ({ userName: m.userName, message: m.message, isAi: m.isAi })),
+          documentType: docType,
+          roomTitle: room?.title ?? "Project",
+          roomId,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? "Failed to generate document");
+      }
+      const doc = await res.json();
+      setGeneratedDoc(doc);
+    } catch (e: any) {
+      setGenDocError(e.message ?? "Failed to generate document");
+    } finally {
+      setGenDocLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!roomId || !user) return;
@@ -171,19 +224,16 @@ export default function LiveRoom() {
   };
 
   const askAi = async () => {
-    if (!chatInput.trim() || !roomId || !user) return;
+    if (!chatInput.trim() || !roomId || !user || aiLoading) return;
     const msg = chatInput.trim();
     setChatInput("");
     const msgData = { userId: user._id, userName: user.name, message: msg, isAi: false };
     if (isFirebaseEnabled && db) {
-      await addDoc(collection(db, `liverooms/${roomId}/messages`), {
-        ...msgData,
-        createdAt: serverTimestamp(),
-      });
+      await addDoc(collection(db, `liverooms/${roomId}/messages`), { ...msgData, createdAt: serverTimestamp() });
     } else {
       addLocalMessage(msgData);
     }
-    aiChat.mutate({ data: { message: msg, roomId } });
+    await callAiChat(msg, chatMessages);
   };
 
   if (!isAuthenticated) {
@@ -223,6 +273,7 @@ export default function LiveRoom() {
   const isSignedByMe = nda?.signedBy?.includes(user?._id ?? "");
 
   return (
+    <>
     <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
       {/* TOP BAR */}
       <div className="shrink-0 border-b border-border/40 bg-background/80 backdrop-blur-sm">
@@ -682,7 +733,9 @@ export default function LiveRoom() {
         </div>
 
         {/* RIGHT: Chat */}
-        <div className="w-72 shrink-0 border-l border-border/40 flex flex-col overflow-hidden bg-card/20">
+        <div className="w-80 shrink-0 border-l border-border/40 flex flex-col overflow-hidden bg-card/20">
+
+          {/* Meet link */}
           <div className="shrink-0 border-b border-border/40 p-3">
             {room.meetLink ? (
               <a href={room.meetLink} target="_blank" rel="noreferrer" className="block">
@@ -698,65 +751,217 @@ export default function LiveRoom() {
             )}
           </div>
 
+          {/* Chat header */}
           <div className="shrink-0 px-3 py-2 border-b border-border/40 flex items-center justify-between">
-            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Live Chat</span>
-            {!isFirebaseEnabled && (
-              <span className="text-[9px] text-amber-400/70 font-medium">demo mode</span>
-            )}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                {docMode ? "Document Mode" : "Live Chat"}
+              </span>
+              {docMode && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/20 border border-primary/30 text-primary font-semibold">
+                  Select range
+                </span>
+              )}
+              {!isFirebaseEnabled && !docMode && (
+                <span className="text-[9px] text-amber-400/70 font-medium">demo</span>
+              )}
+            </div>
+            <button
+              onClick={() => { setDocMode(!docMode); setStartIdx(null); setEndIdx(null); setGenDocError(null); }}
+              className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium ${
+                docMode
+                  ? "border-primary/50 bg-primary/10 text-primary hover:bg-primary/20"
+                  : "border-border/40 text-muted-foreground hover:border-primary/30 hover:text-primary"
+              }`}
+            >
+              {docMode ? "✕ Exit" : "Doc Mode"}
+            </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
+          {/* Doc mode hint */}
+          {docMode && startIdx === null && (
+            <div className="shrink-0 px-3 py-2 bg-primary/5 border-b border-primary/10">
+              <p className="text-[10px] text-primary/70 leading-relaxed">
+                Click <strong>Set Start</strong> on a message, then <strong>Set End</strong> on another to select a conversation range for document generation.
+              </p>
+            </div>
+          )}
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
             {chatMessages.length === 0 && (
               <div className="text-center py-8 space-y-2">
-                <p className="text-xs text-muted-foreground/40">Start the conversation</p>
-                {!isFirebaseEnabled && (
+                <p className="text-xs text-muted-foreground/40">
+                  {docMode ? "No messages to select yet" : "Start the conversation"}
+                </p>
+                {!isFirebaseEnabled && !docMode && (
                   <p className="text-[10px] text-muted-foreground/30 leading-relaxed px-2">
-                    Chat is session-only in demo mode. Add Firebase keys for persistence.
+                    Chat is session-only in demo mode.
                   </p>
                 )}
               </div>
             )}
-            {chatMessages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`rounded-lg p-2 text-xs ${msg.isAi ? "bg-primary/10 border border-primary/20" : "bg-card border border-border/30"}`}
-              >
-                <div className="flex items-center gap-1.5 mb-1">
-                  {msg.isAi && (
-                    <span className="text-[9px] bg-primary/20 text-primary border border-primary/30 rounded px-1 py-0.5 font-semibold">AI</span>
+
+            {chatMessages.map((msg, idx) => {
+              const lo = startIdx !== null && endIdx !== null ? Math.min(startIdx, endIdx) : null;
+              const hi = startIdx !== null && endIdx !== null ? Math.max(startIdx, endIdx) : null;
+              const inRange = lo !== null && hi !== null && idx >= lo && idx <= hi;
+              const isStart = startIdx === idx;
+              const isEnd = endIdx === idx;
+
+              return (
+                <div
+                  key={msg.id}
+                  className={`rounded-lg p-2 text-xs transition-colors ${
+                    inRange
+                      ? "bg-primary/10 border border-primary/25 ring-1 ring-primary/10"
+                      : msg.isAi
+                      ? "bg-primary/5 border border-primary/15"
+                      : "bg-card border border-border/30"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-1">
+                    {msg.isAi && (
+                      <span className="text-[9px] bg-primary/20 text-primary border border-primary/30 rounded px-1 py-0.5 font-semibold">AI</span>
+                    )}
+                    <span className={`text-[11px] font-medium flex-1 ${msg.isAi ? "text-primary" : "text-foreground/80"}`}>
+                      {msg.userName}
+                    </span>
+                    {inRange && (
+                      <span className="text-[8px] text-primary/60 font-mono">{idx - (lo ?? 0) + 1}</span>
+                    )}
+                  </div>
+
+                  <p className="text-foreground/85 leading-relaxed whitespace-pre-wrap">{msg.message}</p>
+
+                  {docMode && (
+                    <div className="flex gap-1 mt-1.5 pt-1.5 border-t border-border/20">
+                      <button
+                        onClick={() => setStartIdx(idx)}
+                        className={`text-[9px] px-1.5 py-0.5 rounded transition-colors font-medium ${
+                          isStart
+                            ? "bg-primary text-white"
+                            : "bg-primary/10 text-primary/70 hover:bg-primary/20 hover:text-primary"
+                        }`}
+                      >
+                        {isStart ? "▶ Start" : "Set Start"}
+                      </button>
+                      <button
+                        onClick={() => setEndIdx(idx)}
+                        className={`text-[9px] px-1.5 py-0.5 rounded transition-colors font-medium ${
+                          isEnd
+                            ? "bg-primary text-white"
+                            : "bg-primary/10 text-primary/70 hover:bg-primary/20 hover:text-primary"
+                        }`}
+                      >
+                        {isEnd ? "◀ End" : "Set End"}
+                      </button>
+                    </div>
                   )}
-                  <span className={`text-[11px] font-medium ${msg.isAi ? "text-primary" : "text-foreground/80"}`}>
-                    {msg.userName}
-                  </span>
                 </div>
-                <p className="text-foreground/85 leading-relaxed">{msg.message}</p>
+              );
+            })}
+
+            {/* AI typing indicator */}
+            {aiLoading && (
+              <div className="rounded-lg p-2 text-xs bg-primary/5 border border-primary/15">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-[9px] bg-primary/20 text-primary border border-primary/30 rounded px-1 py-0.5 font-semibold">AI</span>
+                  <span className="text-[11px] font-medium text-primary">DEHIX AI</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary/50 animate-bounce" style={{ animationDelay: "0ms" }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary/50 animate-bounce" style={{ animationDelay: "150ms" }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary/50 animate-bounce" style={{ animationDelay: "300ms" }} />
+                </div>
               </div>
-            ))}
+            )}
+
             <div ref={chatEndRef} />
           </div>
 
-          <div className="shrink-0 border-t border-border/40 p-2.5 space-y-2">
-            <textarea
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
-              }}
-              placeholder="Message... (Enter to send)"
-              className="w-full bg-card border border-border/50 rounded-md px-2.5 py-2 text-xs outline-none focus:border-primary/50 placeholder:text-muted-foreground/40 resize-none min-h-[52px]"
-              rows={2}
-            />
-            <div className="flex gap-1.5">
-              <Button size="sm" variant="outline" className="flex-1 text-xs h-7" onClick={sendChat} disabled={!chatInput.trim()}>
-                Send
-              </Button>
-              <Button size="sm" className="flex-1 text-xs h-7" onClick={askAi} disabled={!chatInput.trim() || aiChat.isPending}>
-                {aiChat.isPending ? "..." : "Ask AI"}
+          {/* Document generation controls */}
+          {docMode && startIdx !== null && endIdx !== null && (
+            <div className="shrink-0 border-t border-primary/20 bg-primary/5 p-2.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-primary font-semibold">
+                  {Math.abs(endIdx - startIdx) + 1} messages selected
+                </span>
+                <button
+                  onClick={() => { setStartIdx(null); setEndIdx(null); setGenDocError(null); }}
+                  className="text-[9px] text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Clear
+                </button>
+              </div>
+
+              <select
+                value={docType}
+                onChange={(e) => setDocType(e.target.value)}
+                className="w-full bg-background border border-border/50 rounded-md px-2 py-1.5 text-xs outline-none focus:border-primary/50 text-foreground"
+              >
+                <option value="pitch_deck">Pitch Deck</option>
+                <option value="technical_deck">Technical Deck</option>
+                <option value="bd_strategy">BD Strategy</option>
+                <option value="sow">Statement of Work</option>
+                <option value="project_brief">Project Brief</option>
+              </select>
+
+              {genDocError && (
+                <p className="text-[10px] text-destructive leading-relaxed">{genDocError}</p>
+              )}
+
+              <Button
+                size="sm"
+                className="w-full text-xs h-7 glow-purple"
+                onClick={handleGenerateDoc}
+                disabled={genDocLoading}
+              >
+                {genDocLoading ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full border border-white/40 border-t-white animate-spin" />
+                    Generating...
+                  </span>
+                ) : "Generate Document"}
               </Button>
             </div>
-          </div>
+          )}
+
+          {/* Chat input */}
+          {!docMode && (
+            <div className="shrink-0 border-t border-border/40 p-2.5 space-y-2">
+              <textarea
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+                  if (e.key === "Enter" && e.shiftKey && e.ctrlKey) { e.preventDefault(); askAi(); }
+                }}
+                placeholder={"Message... (Enter to send, Ctrl+Shift+Enter for AI)"}
+                className="w-full bg-card border border-border/50 rounded-md px-2.5 py-2 text-xs outline-none focus:border-primary/50 placeholder:text-muted-foreground/40 resize-none min-h-[52px]"
+                rows={2}
+              />
+              <div className="flex gap-1.5">
+                <Button size="sm" variant="outline" className="flex-1 text-xs h-7" onClick={sendChat} disabled={!chatInput.trim()}>
+                  Send
+                </Button>
+                <Button size="sm" className="flex-1 text-xs h-7" onClick={askAi} disabled={!chatInput.trim() || aiLoading}>
+                  {aiLoading ? (
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-full border border-white/40 border-t-white animate-spin" />
+                      AI...
+                    </span>
+                  ) : "Ask AI"}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
+
+    {/* Document modal */}
+    <DocModal doc={generatedDoc} onClose={() => setGeneratedDoc(null)} />
+    </>
   );
 }
