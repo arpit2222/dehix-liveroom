@@ -929,31 +929,37 @@ export default function LiveRoom() {
 
           {/* Chat input */}
           {!docMode && (
-            <div className="shrink-0 border-t border-border/40 p-2.5 space-y-2">
+            <div className="shrink-0 border-t border-border/40 p-2.5 space-y-1.5">
               <textarea
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
-                  if (e.key === "Enter" && e.shiftKey && e.ctrlKey) { e.preventDefault(); askAi(); }
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askAi(); }
                 }}
-                placeholder={"Message... (Enter to send, Ctrl+Shift+Enter for AI)"}
+                placeholder="Ask anything… Enter to send to AI"
                 className="w-full bg-card border border-border/50 rounded-md px-2.5 py-2 text-xs outline-none focus:border-primary/50 placeholder:text-muted-foreground/40 resize-none min-h-[52px]"
                 rows={2}
               />
-              <div className="flex gap-1.5">
-                <Button size="sm" variant="outline" className="flex-1 text-xs h-7" onClick={sendChat} disabled={!chatInput.trim()}>
-                  Send
-                </Button>
-                <Button size="sm" className="flex-1 text-xs h-7" onClick={askAi} disabled={!chatInput.trim() || aiLoading}>
-                  {aiLoading ? (
-                    <span className="flex items-center gap-1">
-                      <span className="w-2.5 h-2.5 rounded-full border border-white/40 border-t-white animate-spin" />
-                      AI...
-                    </span>
-                  ) : "Ask AI"}
-                </Button>
-              </div>
+              <Button
+                size="sm"
+                className="w-full text-xs h-7"
+                onClick={askAi}
+                disabled={!chatInput.trim() || aiLoading}
+              >
+                {aiLoading ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full border border-white/40 border-t-white animate-spin" />
+                    Thinking...
+                  </span>
+                ) : "Ask AI"}
+              </Button>
+              <button
+                onClick={sendChat}
+                disabled={!chatInput.trim() || aiLoading}
+                className="w-full text-[10px] text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors disabled:opacity-30 disabled:cursor-not-allowed py-0.5"
+              >
+                Send to room only (no AI)
+              </button>
             </div>
           )}
         </div>
