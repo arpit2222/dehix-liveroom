@@ -8,6 +8,7 @@ export interface ILiveRoom extends Document {
   aiScopedBrief?: Record<string, unknown>;
   status: "scoping" | "matching" | "open" | "assembling" | "contracted" | "closed";
   meetLink?: string;
+  notes?: string;
   contractedAt?: Date;
   createdAt: Date;
 }
@@ -25,6 +26,7 @@ const LiveRoomSchema = new Schema<ILiveRoom>(
       default: "scoping",
     },
     meetLink: { type: String },
+    notes: { type: String },
     contractedAt: { type: Date },
   },
   { timestamps: true, collection: "test_livechat_live_rooms" }

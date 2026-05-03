@@ -1,6 +1,7 @@
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
+import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/context/AuthContext";
 import NotFound from "@/pages/not-found";
@@ -11,6 +12,8 @@ import CreateRoom from "@/pages/CreateRoom";
 import LiveRoom from "@/pages/LiveRoom";
 import TalentDashboard from "@/pages/TalentDashboard";
 import TalentProfile from "@/pages/TalentProfile";
+import TalentDiscovery from "@/pages/TalentDiscovery";
+import JoinRoom from "@/pages/JoinRoom";
 import BusinessDashboard from "@/pages/BusinessDashboard";
 
 const queryClient = new QueryClient({
@@ -30,8 +33,10 @@ function Router() {
       <Route path="/register" component={Register} />
       <Route path="/room/create" component={CreateRoom} />
       <Route path="/room/:id" component={LiveRoom} />
+      <Route path="/room/join" component={JoinRoom} />
       <Route path="/talent/dashboard" component={TalentDashboard} />
       <Route path="/talent/profile/:id" component={TalentProfile} />
+      <Route path="/talent/discovery" component={TalentDiscovery} />
       <Route path="/business/dashboard" component={BusinessDashboard} />
       <Route component={NotFound} />
     </Switch>
@@ -47,6 +52,7 @@ function App() {
             <Router />
           </WouterRouter>
           <Toaster />
+          <SonnerToaster position="bottom-right" richColors />
         </TooltipProvider>
       </AuthProvider>
     </QueryClientProvider>

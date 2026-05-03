@@ -11,6 +11,7 @@ import { Milestone } from "../models/Milestone.js";
 import { Nda } from "../models/Nda.js";
 import { User } from "../models/User.js";
 import { SbtCredential } from "../models/SbtCredential.js";
+import { RoomActivity } from "../models/RoomActivity.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { ScopeProjectBody, MatchTalentBody, GenerateNdaBody, SuggestMilestonesBody, AiChatBody } from "@workspace/api-zod";
 
@@ -97,7 +98,7 @@ router.post("/match", requireAuth, async (req: AuthRequest, res) => {
   try {
     const creds = await SbtCredential.find({
       skillDomain: new RegExp(skillDomain, "i"),
-      level: { $gte: requiredLevel },
+      level: { $gte: requiredLevel } as any,
       reputationScore: { $gte: minReputation },
       status: "verified",
     })
@@ -178,6 +179,7 @@ router.post("/generate-nda", requireAuth, async (req: AuthRequest, res) => {
     if (!isOpenAiEnabled) {
       const content = mockNda(room.title, business?.name ?? "Business", talentNames, milestoneList);
       const saved = await saveNda(content);
+      RoomActivity.create({ roomId: String(roomId), type: "nda_generated", meta: { by: req.userId } }).catch(() => {});
       res.json({ _id: saved._id, roomId: saved.roomId, content: saved.content, signedBy: saved.signedBy, status: saved.status, createdAt: saved.createdAt });
       return;
     }
@@ -209,6 +211,7 @@ Date: ${new Date().toLocaleDateString()}`;
 
     const content = completion.choices[0]?.message?.content ?? "";
     const saved = await saveNda(content);
+    RoomActivity.create({ roomId: String(roomId), type: "nda_generated", meta: { by: req.userId } }).catch(() => {});
     res.json({ _id: saved._id, roomId: saved.roomId, content: saved.content, signedBy: saved.signedBy, status: saved.status, createdAt: saved.createdAt });
   } catch (err) {
     req.log.error({ err }, "generateNda error — falling back to mock");
@@ -281,9 +284,16 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
   const { message, roomId } = parsed.data;
-  const history: Array<{ role: "user" | "assistant"; content: string }> = Array.isArray(req.body.history)
-    ? req.body.history.slice(-15)
-    : [];
+  const rawHistory = Array.isArray(req.body.history) ? req.body.history.slice(-15) : [];
+  const history: Array<{ role: "user" | "assistant"; content: string }> = rawHistory.map((m: any) => {
+    if (m.role === "user" || m.role === "assistant") {
+      return { role: m.role as "user" | "assistant", content: String(m.content ?? m.message ?? "") };
+    }
+    return {
+      role: (m.isAi ? "assistant" : "user") as "user" | "assistant",
+      content: String(m.message ?? m.content ?? ""),
+    };
+  });
 
   if (!isOpenAiEnabled) {
     const room = await LiveRoom.findById(roomId).catch(() => null);
@@ -333,6 +343,54 @@ Format your response with clear structure when the answer is complex (use number
     req.log.error({ err }, "aiChat error — falling back to mock");
     const room = await LiveRoom.findById(roomId).catch(() => null);
     res.json({ reply: mockChat(message, room?.title ?? "your project") });
+  }
+});
+
+router.post("/suggest-tickets", requireAuth, async (req: AuthRequest, res) => {
+  const { roomId } = req.body;
+  if (!roomId) { res.status(400).json({ error: "roomId required" }); return; }
+  try {
+    const room = await LiveRoom.findById(roomId);
+    if (!room) { res.status(404).json({ error: "Room not found" }); return; }
+    const brief = room.aiScopedBrief as any;
+
+    if (!isOpenAiEnabled) {
+      const mockTickets = [
+        { title: "Set up monorepo structure and CI/CD pipeline", estimatedHours: 8, milestoneNumber: 1 },
+        { title: "Design and implement core data models", estimatedHours: 12, milestoneNumber: 1 },
+        { title: "Build authentication and authorization system", estimatedHours: 10, milestoneNumber: 1 },
+        { title: "Implement smart contract core logic", estimatedHours: 24, milestoneNumber: 2 },
+        { title: "Write comprehensive unit tests", estimatedHours: 16, milestoneNumber: 2 },
+        { title: "Build frontend dashboard skeleton", estimatedHours: 20, milestoneNumber: 2 },
+        { title: "Integrate wallet connection (MetaMask / WalletConnect)", estimatedHours: 10, milestoneNumber: 3 },
+        { title: "Security audit and penetration testing", estimatedHours: 20, milestoneNumber: 3 },
+      ];
+      res.json(mockTickets);
+      return;
+    }
+
+    const prompt = `You are a Web3 engineering lead. Given this project, generate 6-10 actionable development tickets.
+Return ONLY valid JSON array, no markdown.
+
+Project: ${room.title}
+Summary: ${brief?.projectSummary ?? room.rawDescription}
+Complexity: ${brief?.complexity ?? "high"}
+
+Return array of: [{ "title": string (concise action), "description": string (1 sentence), "estimatedHours": number, "milestoneNumber": 1|2|3 }]`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-5.2",
+      messages: [{ role: "user", content: prompt }],
+      max_completion_tokens: 1024,
+    });
+
+    const content = completion.choices[0]?.message?.content ?? "[]";
+    const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
+    const tickets = JSON.parse(cleaned);
+    res.json(tickets);
+  } catch (err) {
+    req.log.error({ err }, "suggestTickets error");
+    res.status(500).json({ error: "Failed to suggest tickets" });
   }
 });
 
@@ -424,6 +482,56 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
   } catch (err) {
     req.log.error({ err }, "Failed to save GeneratedDoc — returning unsaved");
     res.json({ title, documentType, content, messageCount: convMsgs.length });
+  }
+});
+
+router.post("/chat-summary", requireAuth, async (req: AuthRequest, res) => {
+  const { messages, roomId } = req.body;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    res.status(400).json({ error: "messages array required" });
+    return;
+  }
+  try {
+    const room = roomId ? await LiveRoom.findById(roomId).catch(() => null) : null;
+    const conversation = (messages as any[])
+      .slice(-40)
+      .map((m: any) => `${m.isAi ? "AI" : m.userName}: ${m.message}`)
+      .join("\n");
+
+    if (!isOpenAiEnabled) {
+      res.json({
+        summary: `Key discussion points for ${room?.title ?? "this project"}:\n• Project scope and technical architecture discussed\n• Team roles and skill requirements identified\n• Timeline and budget estimates reviewed\n• Next steps: finalize roles and begin talent matching`,
+        keyDecisions: ["Proceed with Web3-native architecture", "Use milestone-based escrow", "Begin talent search immediately"],
+        actionItems: ["Generate AI brief", "Invite verified talent", "Set up Google Meet", "Create project milestones"],
+      });
+      return;
+    }
+
+    const prompt = `You are a meeting summarization AI. Given this chat conversation, extract key information.
+Return ONLY valid JSON:
+{
+  "summary": "2-3 sentence overview of what was discussed",
+  "keyDecisions": ["list of key decisions made"],
+  "actionItems": ["list of action items and next steps"]
+}
+
+Conversation:
+${conversation}
+
+Project: ${room?.title ?? "Web3 Project"}`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-5.2",
+      messages: [{ role: "user", content: prompt }],
+      max_completion_tokens: 512,
+    });
+
+    const content = completion.choices[0]?.message?.content ?? "{}";
+    const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
+    res.json(JSON.parse(cleaned));
+  } catch (err) {
+    req.log.error({ err }, "chatSummary error");
+    res.status(500).json({ error: "Failed to summarize conversation" });
   }
 });
 

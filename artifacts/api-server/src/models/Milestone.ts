@@ -7,6 +7,8 @@ export interface IMilestone extends Document {
   amountUsd?: number;
   dueDate?: Date;
   status: "pending" | "in_progress" | "submitted" | "approved" | "released";
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const MilestoneSchema = new Schema<IMilestone>(
@@ -22,7 +24,7 @@ const MilestoneSchema = new Schema<IMilestone>(
       default: "pending",
     },
   },
-  { collection: "test_livechat_milestones" }
+  { timestamps: true, collection: "test_livechat_milestones" }
 );
 
 export const Milestone = mongoose.model<IMilestone>("Milestone", MilestoneSchema);

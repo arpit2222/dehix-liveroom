@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Nda } from "../models/Nda.js";
 import { LiveRoom } from "../models/LiveRoom.js";
+import { RoomActivity } from "../models/RoomActivity.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { getIo } from "../socket.js";
 
@@ -39,8 +40,10 @@ router.post("/sign", requireAuth, async (req: AuthRequest, res) => {
         room.contractedAt = new Date();
         await room.save();
       }
+      RoomActivity.create({ roomId: String(req.params["id"]), type: "nda_signed", actorId: userId, meta: { fullyExecuted: true } }).catch(() => {});
     } else {
       nda.status = "pending_signatures";
+      RoomActivity.create({ roomId: String(req.params["id"]), type: "nda_signed", actorId: userId, meta: { fullyExecuted: false } }).catch(() => {});
     }
     await nda.save();
     const io = getIo();

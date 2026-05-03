@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const DEMO_ACCOUNTS = [
-  { label: "Business", email: "business@demo.com", password: "demo123", desc: "Nexus Protocol — open rooms, scope projects, hire talent" },
-  { label: "Developer", email: "alex@demo.com", password: "demo123", desc: "Alex Chen — Solidity L2 · Reputation 920" },
+  { label: "Business", email: "business@demo.com", password: "demo123", desc: "Nexus Protocol — open rooms, scope projects, hire talent", role: "business" },
+  { label: "Alex Chen", email: "alex@demo.com", password: "demo123", desc: "Solidity L2 · ZK Proofs L1 · Reputation 920", role: "talent" },
+  { label: "Priya Sharma", email: "priya@demo.com", password: "demo123", desc: "React L2 · Node.js L1 · Reputation 875", role: "talent" },
+  { label: "Marco Rossi", email: "marco@demo.com", password: "demo123", desc: "Rust L2 · Security L2 · Reputation 960", role: "talent" },
 ];
 
 export default function Login() {
@@ -64,23 +66,23 @@ export default function Login() {
             <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
             <span className="text-xs font-semibold text-primary uppercase tracking-wider">Quick Demo Access</span>
           </div>
-          <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
             {DEMO_ACCOUNTS.map((acc) => (
               <button
                 key={acc.email}
                 onClick={() => quickLogin(acc.email, acc.password, acc.label)}
                 disabled={isPending}
-                className="w-full text-left rounded-lg border border-border/50 bg-background/50 px-3 py-2.5 hover:border-primary/40 hover:bg-primary/5 transition-colors group disabled:opacity-50"
+                className="text-left rounded-lg border border-border/50 bg-background/50 px-3 py-2.5 hover:border-primary/40 hover:bg-primary/5 transition-colors group disabled:opacity-50"
               >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-xs font-semibold text-foreground group-hover:text-primary transition-colors">
-                      {loadingDemo === acc.label ? "Signing in..." : `Enter as ${acc.label}`}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5">{acc.desc}</div>
+                <div className="flex items-start justify-between gap-1 mb-1">
+                  <div className="text-xs font-semibold text-foreground group-hover:text-primary transition-colors truncate">
+                    {loadingDemo === acc.label ? "Signing in..." : acc.label}
                   </div>
-                  <div className="text-muted-foreground/40 group-hover:text-primary/60 transition-colors ml-2">→</div>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded border font-medium shrink-0 ${acc.role === "business" ? "text-amber-400 border-amber-800/40 bg-amber-950/30" : "text-emerald-400 border-emerald-800/40 bg-emerald-950/30"}`}>
+                    {acc.role}
+                  </span>
                 </div>
+                <div className="text-[10px] text-muted-foreground leading-tight">{acc.desc}</div>
               </button>
             ))}
           </div>

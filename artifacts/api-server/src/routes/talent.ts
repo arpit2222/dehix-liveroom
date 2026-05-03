@@ -4,11 +4,58 @@ import { SbtCredential } from "../models/SbtCredential.js";
 import { RoomParticipant } from "../models/RoomParticipant.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
+import { Milestone } from "../models/Milestone.js";
+import { RoomActivity } from "../models/RoomActivity.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { UpdateAvailabilityBody, RespondInviteBody } from "@workspace/api-zod";
 import { getIo } from "../socket.js";
 
 const router = Router();
+
+router.get("/search", async (req, res) => {
+  try {
+    const { skill, minRep = "0", onlineOnly = "false", limit = "20" } = req.query as Record<string, string>;
+    const credFilter: Record<string, any> = { status: "verified" };
+    if (skill) credFilter.skillDomain = new RegExp(skill, "i");
+    const repNum = parseInt(minRep, 10) || 0;
+    if (repNum > 0) credFilter.reputationScore = { $gte: repNum };
+
+    const creds = await SbtCredential.find(credFilter)
+      .populate("userId", "-password")
+      .sort({ reputationScore: -1 })
+      .limit(parseInt(limit, 10) || 20);
+
+    const seen = new Set<string>();
+    const results: any[] = [];
+    for (const c of creds) {
+      const user = c.userId as any;
+      if (!user || seen.has(String(user._id))) continue;
+      if (onlineOnly === "true" && !user.isOnline) continue;
+      seen.add(String(user._id));
+      const allCreds = await SbtCredential.find({ userId: user._id, status: "verified" });
+      const overallRep = allCreds.length > 0
+        ? Math.round(allCreds.reduce((s, x) => s + x.reputationScore, 0) / allCreds.length)
+        : c.reputationScore;
+      results.push({
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          avatarUrl: user.avatarUrl ?? null,
+          walletAddress: user.walletAddress ?? null,
+          isOnline: user.isOnline,
+          createdAt: user.createdAt,
+        },
+        overallReputation: overallRep,
+        credentials: allCreds.map(formatCred),
+        primarySkill: c.skillDomain,
+      });
+    }
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: "Talent search failed" });
+  }
+});
 
 router.get("/profile/:id", async (req, res) => {
   try {
@@ -118,6 +165,55 @@ router.get("/invites", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+router.get("/rooms", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const participants = await RoomParticipant.find({
+      userId: req.userId,
+      status: "joined",
+    });
+    const results = await Promise.all(
+      participants.map(async (p) => {
+        const [room, role, milestones] = await Promise.all([
+          LiveRoom.findById(p.roomId),
+          p.roleId ? RoomRole.findById(p.roleId) : null,
+          Milestone.find({ roomId: p.roomId }),
+        ]);
+        const releasedUsd = milestones.filter((m) => m.status === "released").reduce((s, m) => s + (m.amountUsd ?? 0), 0);
+        const totalUsd = milestones.reduce((s, m) => s + (m.amountUsd ?? 0), 0);
+        return {
+          participantId: p._id,
+          roomId: p.roomId,
+          joinedAt: p.joinedAt,
+          milestoneStats: { total: milestones.length, totalUsd, releasedUsd },
+          room: room
+            ? {
+                _id: room._id,
+                roomCode: room.roomCode,
+                title: room.title,
+                rawDescription: room.rawDescription,
+                status: room.status,
+                meetLink: room.meetLink ?? null,
+                contractedAt: room.contractedAt ?? null,
+                businessId: room.businessId,
+                createdAt: room.createdAt,
+              }
+            : null,
+          role: role
+            ? {
+                _id: role._id,
+                roleTitle: role.roleTitle,
+                skillDomain: role.skillDomain,
+              }
+            : null,
+        };
+      })
+    );
+    res.json(results.filter((r) => r.room !== null));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to get talent rooms" });
+  }
+});
+
 router.post("/respond-invite", requireAuth, async (req: AuthRequest, res) => {
   const parsed = RespondInviteBody.safeParse(req.body);
   if (!parsed.success) {
@@ -138,6 +234,9 @@ router.post("/respond-invite", requireAuth, async (req: AuthRequest, res) => {
     }
     if (action === "accept" && participant.roleId) {
       await RoomRole.findByIdAndUpdate(participant.roleId, { status: "accepted", filledBy: req.userId });
+    }
+    if (action === "accept") {
+      RoomActivity.create({ roomId: String(participant.roomId), type: "participant_joined", actorId: req.userId }).catch(() => {});
     }
     const io = getIo();
     if (io) {

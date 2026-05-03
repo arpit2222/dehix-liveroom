@@ -22,7 +22,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
   try {
-    const ticket = await Ticket.create({ roomId: req.params["id"], ...parsed.data });
+    const ticket = await Ticket.create({ roomId: String(req.params["id"]), ...parsed.data });
     const io = getIo();
     if (io) {
       io.to(`room:${req.params["id"]}`).emit("room:ticket_updated", formatTicket(ticket));

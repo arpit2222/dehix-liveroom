@@ -78,7 +78,7 @@ async function seed() {
     },
   ]);
 
-  const credentialSeeds = [
+  const credentialSeeds: Array<{ userId: any; skillDomain: string; level: 1 | 2; reputationScore: number; githubScore: number; interviewScore: number; projectsCompleted: number }> = [
     { userId: talents[0]!._id, skillDomain: SKILL_DOMAINS[0]!, level: 2, reputationScore: 920, githubScore: 95, interviewScore: 88, projectsCompleted: 12 },
     { userId: talents[0]!._id, skillDomain: SKILL_DOMAINS[4]!, level: 1, reputationScore: 780, githubScore: 80, interviewScore: 75, projectsCompleted: 5 },
     { userId: talents[1]!._id, skillDomain: SKILL_DOMAINS[1]!, level: 2, reputationScore: 875, githubScore: 90, interviewScore: 85, projectsCompleted: 18 },

@@ -93,4 +93,23 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+router.put("/profile", requireAuth, async (req: AuthRequest, res) => {
+  const { name, walletAddress } = req.body;
+  const updates: Record<string, any> = {};
+  if (name && typeof name === "string" && name.trim()) updates.name = name.trim();
+  if (walletAddress !== undefined) updates.walletAddress = walletAddress?.trim() || null;
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid fields to update" });
+    return;
+  }
+  try {
+    const user = await User.findByIdAndUpdate(req.userId, updates, { new: true });
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    res.json(safeUser(user));
+  } catch (err) {
+    req.log.error({ err }, "updateProfile error");
+    res.status(500).json({ error: "Failed to update profile" });
+  }
+});
+
 export default router;

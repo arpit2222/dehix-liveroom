@@ -18,6 +18,77 @@ const STATS = [
   { value: "$48M+", label: "Milestone escrow locked" },
 ];
 
+const FEATURES = [
+  {
+    icon: "🤖",
+    title: "GPT-Powered AI Research",
+    body: "An always-on AI assistant inside every room. Ask about competitors, market sizing, architecture tradeoffs, salary benchmarks — anything. It knows your project context.",
+  },
+  {
+    icon: "🔗",
+    title: "On-Chain SBT Credentials",
+    body: "Every developer has a Soul Bound Token proving their skills, level, GitHub activity, and past projects. No more fake resumes — reputation is verifiable on-chain.",
+  },
+  {
+    icon: "📋",
+    title: "Auto-Generated Documents",
+    body: "Turn your chat conversation into a pitch deck, technical spec, statement of work, or project brief in one click. AI formats everything professionally.",
+  },
+  {
+    icon: "💰",
+    title: "Milestone-Based Escrow",
+    body: "Define milestones with dollar amounts. Business approves each milestone to release payment. Fully transparent, dispute-resistant, on-chain.",
+  },
+  {
+    icon: "📝",
+    title: "AI-Generated NDA",
+    body: "Smart contract-style NDA generated and signed in the room. Covers confidentiality, IP ownership, milestone payments, and jurisdiction in minutes.",
+  },
+  {
+    icon: "⚡",
+    title: "Real-Time Collaboration",
+    body: "Firebase-backed live chat, Socket.io events, kanban tickets, milestone tracking — everything updates instantly across all participants.",
+  },
+  {
+    icon: "📌",
+    title: "Room Notes & Export",
+    body: "Add private notes visible to all room members. Export the entire room — brief, roles, participants, milestones, tickets, and NDA status — as a formatted Markdown file in one click.",
+  },
+  {
+    icon: "🔴",
+    title: "Remove & Manage Talent",
+    body: "Businesses can remove participants from rooms, contract assembled squads with a single click, and track the full room lifecycle from scoping to closed.",
+  },
+  {
+    icon: "📊",
+    title: "Room Activity Feed",
+    body: "Every room maintains a real-time audit trail — participant joins, NDA signings, milestone releases, contract events, and AI brief generation are all logged and timestamped.",
+  },
+  {
+    icon: "💎",
+    title: "Talent Escrow Dashboard",
+    body: "Developers see exactly how much they've earned across all rooms. Per-room escrow bars show released vs. total milestone amounts at a glance.",
+  },
+];
+
+const TESTIMONIALS = [
+  {
+    quote: "We went from a rough Notion doc to a 4-person signed team in under an hour. The AI brief alone saved us a week of back-and-forth.",
+    name: "Lena K.",
+    role: "DeFi Protocol Founder",
+  },
+  {
+    quote: "As a smart contract dev, having my SBT credential speak for me means I skip the interviews and go straight to interesting projects.",
+    name: "David M.",
+    role: "Solidity Engineer, L2 rep 920",
+  },
+  {
+    quote: "The document mode is incredible. We used the chat to research, then generated a full technical deck for our investors in one click.",
+    name: "Priya S.",
+    role: "CTO, Web3 Infrastructure Startup",
+  },
+];
+
 export default function Landing() {
   const [, navigate] = useLocation();
   const { isAuthenticated, user } = useAuth();
@@ -48,9 +119,15 @@ export default function Landing() {
                 <Button variant="ghost" size="sm" onClick={() => navigate(user?.role === "business" ? "/business/dashboard" : "/talent/dashboard")}>
                   Dashboard
                 </Button>
-                <Button size="sm" onClick={() => navigate("/room/create")}>
-                  Open Room
-                </Button>
+                {user?.role === "business" ? (
+                  <Button size="sm" onClick={() => navigate("/room/create")}>
+                    Open Room
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={() => navigate("/room/join")}>
+                    Join Room
+                  </Button>
+                )}
               </>
             ) : (
               <>
@@ -115,6 +192,25 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* FEATURES */}
+      <section className="py-24 px-6 bg-card/10">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl font-bold tracking-tight mb-3">Everything you need in one room</h2>
+            <p className="text-muted-foreground">AI-powered, Web3-native, real-time collaboration from brief to contract.</p>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {FEATURES.map((f) => (
+              <div key={f.title} className="rounded-xl border border-border/50 bg-card p-6 hover:border-primary/30 transition-colors">
+                <div className="text-2xl mb-3">{f.icon}</div>
+                <h3 className="font-semibold text-foreground mb-2">{f.title}</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed">{f.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* HOW IT WORKS */}
       <section className="py-24 px-6">
         <div className="max-w-5xl mx-auto">
@@ -130,6 +226,50 @@ export default function Landing() {
                 <p className="text-sm text-muted-foreground leading-relaxed">{step.body}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* TESTIMONIALS */}
+      <section className="py-24 px-6 border-t border-border/40 bg-card/10">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl font-bold tracking-tight mb-3">Trusted by Web3 builders</h2>
+            <p className="text-muted-foreground">From solo founders to protocol teams.</p>
+          </div>
+          <div className="grid md:grid-cols-3 gap-5">
+            {TESTIMONIALS.map((t) => (
+              <div key={t.name} className="rounded-xl border border-border/50 bg-card p-6">
+                <p className="text-sm text-muted-foreground leading-relaxed italic mb-5">"{t.quote}"</p>
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center shrink-0">
+                    <span className="text-primary text-xs font-bold">{t.name[0]}</span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium">{t.name}</div>
+                    <div className="text-xs text-muted-foreground">{t.role}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* DEMO CTA */}
+      <section className="py-16 px-6 border-y border-border/40">
+        <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
+          <div>
+            <h2 className="text-xl font-bold mb-1">Try the demo room now</h2>
+            <p className="text-sm text-muted-foreground">Room code <span className="font-mono text-foreground bg-card border border-border/50 rounded px-1.5 py-0.5">NEXUS001</span> · No sign-up needed for read access</p>
+          </div>
+          <div className="flex gap-3 flex-wrap">
+            <Button variant="outline" onClick={() => navigate("/login")}>
+              Sign in to explore
+            </Button>
+            <Button onClick={() => navigate("/register")} className="glow-purple">
+              Create free account
+            </Button>
           </div>
         </div>
       </section>
