@@ -73,7 +73,7 @@ Return this exact JSON structure:
 }`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-5.2",
+      model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 4096,
     });
@@ -204,7 +204,7 @@ Milestones: ${milestones.map((m) => m.title).join(", ")}
 Date: ${new Date().toLocaleDateString()}`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-5.2",
+      model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 2048,
     });
@@ -262,7 +262,7 @@ Total Budget: $${totalBudgetUsd}
 Return array of: [{ "title": string, "description": string, "amountUsd": number, "dueDate": "YYYY-MM-DD" }]`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-5.2",
+      model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 1024,
     });
@@ -332,7 +332,7 @@ Format your response with clear structure when the answer is complex (use number
     ];
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-5.2",
+      model: "gpt-4o",
       messages,
       max_completion_tokens: 1024,
     });
@@ -379,7 +379,7 @@ Complexity: ${brief?.complexity ?? "high"}
 Return array of: [{ "title": string (concise action), "description": string (1 sentence), "estimatedHours": number, "milestoneNumber": 1|2|3 }]`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-5.2",
+      model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 1024,
     });
@@ -448,7 +448,7 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
 
     try {
       const completion = await openai.chat.completions.create({
-        model: "gpt-5.2",
+        model: "gpt-4o",
         messages: [
           { role: "system", content: systemPrompts[documentType] ?? systemPrompts.project_brief },
           { role: "user", content: `Here is the research conversation to base the document on:\n\n${conversationText}\n\nProject title: ${roomTitle}\n\nGenerate the full document now.` },
@@ -521,7 +521,7 @@ ${conversation}
 Project: ${room?.title ?? "Web3 Project"}`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-5.2",
+      model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 512,
     });

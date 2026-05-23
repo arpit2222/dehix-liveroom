@@ -42,7 +42,7 @@ Expected format:
 ["Question 1?", "Question 2?", "Question 3?", "Question 4?"]`;
 
       const completion = await openai.chat.completions.create({
-        model: "gpt-5.2",
+        model: "gpt-4o",
         messages: [{ role: "user", content: prompt }],
         max_completion_tokens: 1024,
       });
@@ -144,7 +144,7 @@ Return this exact JSON structure:
 }`;
 
       const completion = await openai.chat.completions.create({
-        model: "gpt-5.2",
+        model: "gpt-4o",
         messages: [{ role: "user", content: prompt }],
         max_completion_tokens: 4096,
       });
