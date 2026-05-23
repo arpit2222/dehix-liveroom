@@ -24,7 +24,7 @@ const MilestoneSchema = new Schema<IMilestone>(
       default: "pending",
     },
   },
-  { timestamps: true, collection: "test_livechat_milestones" }
+  { timestamps: true, collection: "dl_milestones" }
 );
 
 export const Milestone = mongoose.model<IMilestone>("Milestone", MilestoneSchema);

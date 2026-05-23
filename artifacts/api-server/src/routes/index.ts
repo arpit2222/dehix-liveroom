@@ -13,6 +13,7 @@ import talentRouter from "./talent.js";
 import ticketsSubRouter from "./tickets.js";
 import milestonesSubRouter from "./milestones.js";
 import ndaSubRouter from "./nda.js";
+import launchRouter from "./launch.js";
 
 const router = Router();
 
@@ -21,6 +22,7 @@ router.use("/auth", authRouter);
 router.use("/rooms", roomsRouter);
 router.use("/ai", aiRouter);
 router.use("/talent", talentRouter);
+router.use("/launch", launchRouter);
 router.use("/rooms/:id/tickets", ticketsSubRouter);
 router.use("/rooms/:id/milestones", milestonesSubRouter);
 router.use("/rooms/:id/nda", ndaSubRouter);

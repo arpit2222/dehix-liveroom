@@ -19,7 +19,7 @@ const GeneratedDocSchema = new Schema<IGeneratedDoc>(
     messageCount: { type: Number, default: 0 },
     createdBy: { type: String },
   },
-  { timestamps: true, collection: "test_livechat_generated_docs" }
+  { timestamps: true, collection: "dl_generated_docs" }
 );
 
 export const GeneratedDoc = mongoose.model<IGeneratedDoc>("GeneratedDoc", GeneratedDocSchema);

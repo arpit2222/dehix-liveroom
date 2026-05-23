@@ -20,7 +20,7 @@ const RoomRoleSchema = new Schema<IRoomRole>(
     filledBy: { type: Schema.Types.ObjectId, ref: "User" },
     status: { type: String, enum: ["open", "invited", "accepted", "filled"], default: "open" },
   },
-  { collection: "test_livechat_room_roles" }
+  { collection: "dl_room_roles" }
 );
 
 export const RoomRole = mongoose.model<IRoomRole>("RoomRole", RoomRoleSchema);

@@ -15,7 +15,7 @@ const NdaSchema = new Schema<INda>(
     signedBy: [{ type: String }],
     status: { type: String, enum: ["draft", "pending_signatures", "signed"], default: "draft" },
   },
-  { timestamps: true, collection: "test_livechat_ndas" }
+  { timestamps: true, collection: "dl_ndas" }
 );
 
 export const Nda = mongoose.model<INda>("Nda", NdaSchema);

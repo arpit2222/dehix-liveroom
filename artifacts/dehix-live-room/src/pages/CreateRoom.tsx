@@ -1,21 +1,9 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { useScopeProject, useCreateRoom } from "@workspace/api-client-react";
+import { useCreateLaunchSession, useScopeLaunchSession } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-
-interface ScopedBrief {
-  projectTitle: string;
-  projectSummary: string;
-  estimatedWeeks: number;
-  complexity: string;
-  recommendedStack?: string;
-  roles: Array<{ roleTitle: string; skillDomain: string; requiredLevel: number; minReputation: number; estimatedHours: number }>;
-  milestones: Array<{ title: string; description: string; durationWeeks: number }>;
-  technicalRisks: string[];
-  suggestedTotalBudgetUsd: number;
-}
 
 const EXAMPLE_PROMPTS = [
   "Build a cross-chain DeFi yield aggregator that rebalances positions across Ethereum, Arbitrum, and Optimism. Need smart contract security, a React dashboard, and a ZK-proof privacy layer. Budget ~$80k, 10-12 weeks.",
@@ -26,40 +14,41 @@ const EXAMPLE_PROMPTS = [
 export default function CreateRoom() {
   const [, navigate] = useLocation();
   const { isAuthenticated, user } = useAuth();
+  
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [description, setDescription] = useState("");
-  const [brief, setBrief] = useState<ScopedBrief | null>(null);
+  const [sessionData, setSessionData] = useState<any>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [roomData, setRoomData] = useState<any>(null);
   const [error, setError] = useState("");
-  const [savingBrief, setSavingBrief] = useState(false);
 
-  const scope = useScopeProject({
+  const createSession = useCreateLaunchSession({
     mutation: {
-      onSuccess: (data: any) => { setBrief(data); setError(""); },
+      onSuccess: (data: any) => {
+        setSessionData(data);
+        setError("");
+        setStep(2);
+      },
       onError: (err: any) => {
-        const msg = err?.data?.error ?? "AI scoping failed — try a more detailed description";
+        const msg = err?.data?.error ?? "Failed to initialize session. Please try again.";
         setError(msg);
         toast.error(msg);
       },
     },
   });
 
-  const createRoom = useCreateRoom({
+  const scopeSession = useScopeLaunchSession({
     mutation: {
-      onSuccess: async (data: any) => {
-        if (brief && data._id) {
-          setSavingBrief(true);
-          try {
-            const token = localStorage.getItem("dehix_token");
-            await fetch(`/api/rooms/${data._id}/brief`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ brief }),
-            });
-          } catch (_) {}
-          setSavingBrief(false);
-        }
-        navigate(`/room/${data._id}`);
+      onSuccess: (data: any) => {
+        setRoomData(data);
+        setError("");
+        setStep(3);
       },
-      onError: (err: any) => setError(err?.data?.error ?? "Failed to create room"),
+      onError: (err: any) => {
+        const msg = err?.data?.error ?? "Failed to generate scope. Please try again.";
+        setError(msg);
+        toast.error(msg);
+      },
     },
   });
 
@@ -74,7 +63,23 @@ export default function CreateRoom() {
     );
   }
 
-  const isPending = createRoom.isPending || savingBrief;
+  const handleStartClarification = () => {
+    if (!description.trim() || description.length < 20) return;
+    const title = description.trim().slice(0, 60) + (description.length > 60 ? "..." : "");
+    createSession.mutate({ data: { rawIdea: description, projectTitle: title } });
+  };
+
+  const handleGenerateScope = () => {
+    if (!sessionData) return;
+    const answersArray = Object.entries(answers).map(([questionId, answer]) => ({
+      questionId,
+      answer,
+    }));
+    scopeSession.mutate({
+      id: sessionData.session._id,
+      data: { answers: answersArray },
+    });
+  };
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -85,23 +90,24 @@ export default function CreateRoom() {
           </button>
           <span className="text-border">/</span>
           <span className="text-sm font-medium">New Live Room</span>
-          {brief && (
+          {sessionData?.session?.projectTitle && (
             <>
               <span className="text-border">/</span>
-              <span className="text-sm text-muted-foreground truncate max-w-[200px]">{brief.projectTitle}</span>
+              <span className="text-sm text-muted-foreground truncate max-w-[200px]">{sessionData.session.projectTitle}</span>
             </>
           )}
         </div>
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-12">
-        {!brief ? (
+        {/* STEP 1: RAW IDEA */}
+        {step === 1 && (
           <>
             <div className="mb-10">
-              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Step 1 of 2</div>
+              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Step 1 of 3</div>
               <h1 className="text-3xl font-bold tracking-tight mb-3">Describe your project</h1>
               <p className="text-muted-foreground max-w-xl">
-                Write in plain English. Our AI will scope the work, define team roles, suggest milestones, estimate budget, and surface technical risks.
+                Write your raw idea in plain English. Our AI will analyze it and ask a few clarifying questions before defining the scope.
               </p>
             </div>
 
@@ -118,32 +124,18 @@ export default function CreateRoom() {
                   <span className={`text-xs ${description.length < 20 ? "text-muted-foreground/40" : description.length > 1000 ? "text-amber-400" : "text-muted-foreground"}`}>
                     {description.length} chars {description.length < 20 && description.length > 0 ? "— add more detail" : ""}
                   </span>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        if (!description.trim()) return;
-                        const title = description.trim().slice(0, 60) + (description.length > 60 ? "..." : "");
-                        createRoom.mutate({ data: { title, rawDescription: description } });
-                      }}
-                      disabled={scope.isPending || createRoom.isPending || description.trim().length < 5}
-                    >
-                      Quick Create
-                    </Button>
-                    <Button
-                      onClick={() => { setError(""); scope.mutate({ data: { description } }); }}
-                      disabled={scope.isPending || createRoom.isPending || description.trim().length < 20}
-                      className="glow-purple"
-                    >
-                      {scope.isPending ? (
-                        <span className="flex items-center gap-2">
-                          <span className="w-3 h-3 rounded-full border border-white/30 border-t-white animate-spin" />
-                          Scoping with AI...
-                        </span>
-                      ) : "Scope with AI →"}
-                    </Button>
-                  </div>
+                  <Button
+                    onClick={handleStartClarification}
+                    disabled={createSession.isPending || description.trim().length < 20}
+                    className="glow-purple"
+                  >
+                    {createSession.isPending ? (
+                      <span className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full border border-white/30 border-t-white animate-spin" />
+                        Analyzing...
+                      </span>
+                    ) : "Next: Clarify Details →"}
+                  </Button>
                 </div>
               </div>
 
@@ -167,49 +159,94 @@ export default function CreateRoom() {
               </div>
             </div>
           </>
-        ) : (
+        )}
+
+        {/* STEP 2: CLARIFICATION */}
+        {step === 2 && sessionData && (
+          <div className="space-y-8">
+            <div className="mb-8">
+              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Step 2 of 3</div>
+              <h1 className="text-3xl font-bold tracking-tight mb-3">Let's refine the scope</h1>
+              <p className="text-muted-foreground max-w-xl">
+                The AI needs a bit more context to generate an accurate project brief, milestones, and team requirements.
+              </p>
+            </div>
+
+            <div className="space-y-6">
+              {sessionData.questions.map((q: any) => (
+                <div key={q._id} className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">{q.question}</label>
+                  <textarea
+                    value={answers[q._id] || ""}
+                    onChange={(e) => setAnswers({ ...answers, [q._id]: e.target.value })}
+                    placeholder="Provide more detail here..."
+                    className="w-full bg-card text-foreground placeholder:text-muted-foreground/40 resize-none p-4 rounded-xl border border-border/50 outline-none text-sm focus:border-primary/40 transition-colors min-h-[100px]"
+                  />
+                </div>
+              ))}
+            </div>
+
+            {error && (
+              <div className="rounded-md bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive">{error}</div>
+            )}
+
+            <div className="flex items-center gap-3 pt-4 border-t border-border/40">
+              <Button
+                className="flex-1 glow-purple h-12 text-base"
+                onClick={handleGenerateScope}
+                disabled={scopeSession.isPending}
+              >
+                {scopeSession.isPending ? (
+                  <span className="flex items-center gap-2">
+                    <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                    Generating Full Project Scope...
+                  </span>
+                ) : "Generate Project Plan →"}
+              </Button>
+              <Button variant="outline" className="h-12" onClick={() => setStep(1)} disabled={scopeSession.isPending}>
+                Back
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 3: REVIEW AI SCOPE */}
+        {step === 3 && roomData?.aiScopedBrief && (
           <div className="space-y-6">
             <div className="mb-8">
-              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Step 2 of 2 — Review AI Scope</div>
-              <h1 className="text-2xl font-bold tracking-tight mb-1">{brief.projectTitle}</h1>
-              <p className="text-muted-foreground">{brief.projectSummary}</p>
+              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Step 3 of 3 — Ready to Build</div>
+              <h1 className="text-2xl font-bold tracking-tight mb-1">{roomData.aiScopedBrief.projectTitle}</h1>
+              <p className="text-muted-foreground">{roomData.aiScopedBrief.projectSummary}</p>
             </div>
 
             <div className="grid sm:grid-cols-3 gap-4">
               <div className="rounded-xl border border-border/50 bg-card p-4 text-center">
-                <div className="text-2xl font-bold font-mono">{brief.estimatedWeeks}w</div>
+                <div className="text-2xl font-bold font-mono">{roomData.aiScopedBrief.estimatedWeeks}w</div>
                 <div className="text-xs text-muted-foreground mt-0.5">Timeline</div>
               </div>
               <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 p-4 text-center">
-                <div className="text-2xl font-bold font-mono text-emerald-400">${brief.suggestedTotalBudgetUsd?.toLocaleString()}</div>
+                <div className="text-2xl font-bold font-mono text-emerald-400">${roomData.aiScopedBrief.suggestedTotalBudgetUsd?.toLocaleString()}</div>
                 <div className="text-xs text-muted-foreground mt-0.5">Estimated Budget</div>
               </div>
               <div className={`rounded-xl border p-4 text-center ${
-                brief.complexity === "low" ? "border-emerald-800/40 bg-emerald-950/20" :
-                brief.complexity === "medium" ? "border-amber-800/40 bg-amber-950/20" :
+                roomData.aiScopedBrief.complexity === "low" ? "border-emerald-800/40 bg-emerald-950/20" :
+                roomData.aiScopedBrief.complexity === "medium" ? "border-amber-800/40 bg-amber-950/20" :
                 "border-rose-800/40 bg-rose-950/20"
               }`}>
                 <div className={`text-2xl font-bold capitalize ${
-                  brief.complexity === "low" ? "text-emerald-400" :
-                  brief.complexity === "medium" ? "text-amber-400" :
+                  roomData.aiScopedBrief.complexity === "low" ? "text-emerald-400" :
+                  roomData.aiScopedBrief.complexity === "medium" ? "text-amber-400" :
                   "text-rose-400"
-                }`}>{brief.complexity}</div>
+                }`}>{roomData.aiScopedBrief.complexity}</div>
                 <div className="text-xs text-muted-foreground mt-0.5">Complexity</div>
               </div>
             </div>
 
-            {brief.recommendedStack && (
-              <div className="rounded-xl border border-border/50 bg-card p-4">
-                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Recommended Stack</div>
-                <p className="text-sm text-muted-foreground">{brief.recommendedStack}</p>
-              </div>
-            )}
-
             <div className="grid sm:grid-cols-3 gap-4">
               <div>
-                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Roles ({brief.roles?.length})</div>
+                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Required Team Roles ({roomData.aiScopedBrief.roles?.length})</div>
                 <div className="space-y-1.5">
-                  {brief.roles?.map((r, i) => (
+                  {roomData.aiScopedBrief.roles?.map((r: any, i: number) => (
                     <div key={i} className="text-xs bg-card rounded-lg px-3 py-2 border border-border/40">
                       <div className="font-medium text-foreground truncate">{r.roleTitle}</div>
                       <div className="text-primary truncate">{r.skillDomain}</div>
@@ -219,9 +256,9 @@ export default function CreateRoom() {
                 </div>
               </div>
               <div>
-                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Milestones ({brief.milestones?.length})</div>
+                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Milestones ({roomData.aiScopedBrief.milestones?.length})</div>
                 <div className="space-y-1.5">
-                  {brief.milestones?.map((m, i) => (
+                  {roomData.aiScopedBrief.milestones?.map((m: any, i: number) => (
                     <div key={i} className="text-xs bg-card rounded-lg px-3 py-2 border border-border/40">
                       <div className="font-medium text-foreground truncate">{m.title}</div>
                       <div className="text-muted-foreground">{m.durationWeeks}w</div>
@@ -232,7 +269,7 @@ export default function CreateRoom() {
               <div>
                 <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Risks</div>
                 <div className="space-y-1.5">
-                  {brief.technicalRisks?.slice(0, 5).map((r, i) => (
+                  {roomData.aiScopedBrief.technicalRisks?.slice(0, 5).map((r: string, i: number) => (
                     <div key={i} className="text-xs bg-destructive/5 border border-destructive/20 rounded-lg px-3 py-2 text-destructive/80 leading-tight">
                       ⚠ {r}
                     </div>
@@ -241,25 +278,12 @@ export default function CreateRoom() {
               </div>
             </div>
 
-            {error && (
-              <div className="rounded-md bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive">{error}</div>
-            )}
-
-            <div className="flex items-center gap-3 pt-2">
+            <div className="flex items-center gap-3 pt-4 border-t border-border/40">
               <Button
-                className="flex-1 glow-purple"
-                onClick={() => createRoom.mutate({ data: { title: brief.projectTitle, rawDescription: description } })}
-                disabled={isPending}
+                className="flex-1 glow-purple h-12 text-base"
+                onClick={() => navigate(`/room/${roomData._id}`)}
               >
-                {isPending ? (
-                  <span className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full border border-white/30 border-t-white animate-spin" />
-                    {savingBrief ? "Saving brief..." : "Creating room..."}
-                  </span>
-                ) : "Open Live Room →"}
-              </Button>
-              <Button variant="outline" onClick={() => { setBrief(null); setError(""); }}>
-                Re-scope
+                Open Live Room →
               </Button>
             </div>
           </div>

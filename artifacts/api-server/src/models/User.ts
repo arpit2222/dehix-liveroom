@@ -23,7 +23,7 @@ const UserSchema = new Schema<IUser>(
     isOnline: { type: Boolean, default: false },
     lastSeen: { type: Date, default: Date.now },
   },
-  { timestamps: true, collection: "test_livechat_users" }
+  { timestamps: true, collection: "dl_users" }
 );
 
 export const User = mongoose.model<IUser>("User", UserSchema);

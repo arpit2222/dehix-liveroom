@@ -15,6 +15,7 @@ tags:
   - name: tickets
   - name: milestones
   - name: nda
+  - name: launch
 
 paths:
   /healthz:
@@ -272,6 +273,55 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
+
+  # ── Launch ────────────────────────────────────────────
+  /launch:
+    post:
+      operationId: createLaunchSession
+      tags: [launch]
+      summary: Start a launch session and generate clarifying questions
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLaunchSessionBody"
+      responses:
+        "201":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LaunchSessionWithQuestions"
+
+  /launch/{id}/scope:
+    post:
+      operationId: scopeLaunchSession
+      tags: [launch]
+      summary: Generate full project scope using idea and answers, creating a room
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScopeLaunchSessionBody"
+      responses:
+        "200":
+          description: Room created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
 
   # ── AI ────────────────────────────────────────────────
   /ai/scope:
@@ -1199,3 +1249,87 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    # ── Launch ──────────────────────────────────────────
+    LaunchSession:
+      type: object
+      required: [_id, userId, rawIdea, status]
+      properties:
+        _id:
+          type: string
+        userId:
+          type: string
+        projectTitle:
+          type: string
+        rawIdea:
+          type: string
+        businessGoal:
+          type: string
+        targetAudience:
+          type: string
+        budgetRange:
+          type: string
+        timeline:
+          type: string
+        projectType:
+          type: string
+        status:
+          type: string
+          enum: [draft, clarifying, generating, reviewing, approved, pushed_to_workspace, archived]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    LaunchClarification:
+      type: object
+      required: [_id, sessionId, question, orderIndex]
+      properties:
+        _id:
+          type: string
+        sessionId:
+          type: string
+        question:
+          type: string
+        answer:
+          type: string
+        orderIndex:
+          type: integer
+
+    CreateLaunchSessionBody:
+      type: object
+      required: [rawIdea]
+      properties:
+        rawIdea:
+          type: string
+        projectTitle:
+          type: string
+
+    LaunchSessionWithQuestions:
+      type: object
+      required: [session, questions]
+      properties:
+        session:
+          $ref: "#/components/schemas/LaunchSession"
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/LaunchClarification"
+
+    ScopeLaunchSessionBody:
+      type: object
+      required: [answers]
+      properties:
+        answers:
+          type: array
+          items:
+            type: object
+            required: [questionId, answer]
+            properties:
+              questionId:
+                type: string
+              answer:
+                type: string
+

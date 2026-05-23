@@ -21,7 +21,7 @@ const TicketSchema = new Schema<ITicket>(
     estimatedHours: { type: Number },
     status: { type: String, enum: ["backlog", "todo", "in_progress", "done"], default: "backlog" },
   },
-  { timestamps: true, collection: "test_livechat_tickets" }
+  { timestamps: true, collection: "dl_tickets" }
 );
 
 export const Ticket = mongoose.model<ITicket>("Ticket", TicketSchema);

@@ -34,7 +34,7 @@ const RoomActivitySchema = new Schema<IRoomActivity>(
     actorName: { type: String },
     meta: { type: Schema.Types.Mixed },
   },
-  { timestamps: { createdAt: true, updatedAt: false }, collection: "test_livechat_room_activity" }
+  { timestamps: { createdAt: true, updatedAt: false }, collection: "dl_room_activity" }
 );
 
 export const RoomActivity = mongoose.model<IRoomActivity>("RoomActivity", RoomActivitySchema);

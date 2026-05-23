@@ -29,7 +29,7 @@ const LiveRoomSchema = new Schema<ILiveRoom>(
     notes: { type: String },
     contractedAt: { type: Date },
   },
-  { timestamps: true, collection: "test_livechat_live_rooms" }
+  { timestamps: true, collection: "dl_live_rooms" }
 );
 
 export const LiveRoom = mongoose.model<ILiveRoom>("LiveRoom", LiveRoomSchema);

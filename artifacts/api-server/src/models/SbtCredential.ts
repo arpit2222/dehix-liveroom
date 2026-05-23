@@ -28,7 +28,7 @@ const SbtCredentialSchema = new Schema<ISbtCredential>(
     issuedAt: { type: Date, default: Date.now },
     embeddingText: { type: String },
   },
-  { collection: "test_livechat_sbt_credentials" }
+  { collection: "dl_sbt_credentials" }
 );
 
 export const SbtCredential = mongoose.model<ISbtCredential>("SbtCredential", SbtCredentialSchema);

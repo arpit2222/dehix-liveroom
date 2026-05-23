@@ -16,7 +16,7 @@ const RoomParticipantSchema = new Schema<IRoomParticipant>(
     status: { type: String, enum: ["invited", "joined", "accepted", "declined"], default: "invited" },
     joinedAt: { type: Date, default: Date.now },
   },
-  { collection: "test_livechat_room_participants" }
+  { collection: "dl_room_participants" }
 );
 
 export const RoomParticipant = mongoose.model<IRoomParticipant>("RoomParticipant", RoomParticipantSchema);

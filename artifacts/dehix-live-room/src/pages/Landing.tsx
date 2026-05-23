@@ -261,7 +261,16 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
           <div>
             <h2 className="text-xl font-bold mb-1">Try the demo room now</h2>
-            <p className="text-sm text-muted-foreground">Room code <span className="font-mono text-foreground bg-card border border-border/50 rounded px-1.5 py-0.5">NEXUS001</span> · No sign-up needed for read access</p>
+            <p className="text-sm text-muted-foreground mb-4">Room code <span className="font-mono text-foreground bg-card border border-border/50 rounded px-1.5 py-0.5">NEXUS001</span> · No sign-up needed for read access</p>
+            
+            <div className="bg-card/50 border border-border/50 rounded-lg p-4 max-w-sm">
+              <h3 className="text-sm font-semibold mb-2">Demo Accounts (Password: demo123)</h3>
+              <ul className="text-sm text-muted-foreground space-y-1">
+                <li><strong className="text-foreground">Business:</strong> business@demo.com</li>
+                <li><strong className="text-foreground">Talent (Solidity):</strong> alex@demo.com</li>
+                <li><strong className="text-foreground">Talent (React):</strong> priya@demo.com</li>
+              </ul>
+            </div>
           </div>
           <div className="flex gap-3 flex-wrap">
             <Button variant="outline" onClick={() => navigate("/login")}>
