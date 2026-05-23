@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
+    "dev": "npm run dev:api & npm run dev:client & wait",
+    "dev:api": "export PORT=5001 && npm run dev --workspace=@workspace/api-server",
+    "dev:client": "export PORT=5173 && export VITE_API_URL=http://localhost:5001 && npm run dev --workspace=@workspace/dehix-live-room",
     "build": "npm run typecheck && npm run build --workspaces --if-present",
     "typecheck:libs": "tsc --build",
     "typecheck": "npm run typecheck:libs && npm run typecheck --workspaces --if-present"
