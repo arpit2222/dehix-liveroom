@@ -59,3 +59,10 @@ The `npm run seed` command automatically creates the following dummy accounts fo
 
 **Demo Room:**
 You can join the test room using the code: `NEXUS001`
+
+## Future Scope
+Based on the Product Requirements Document (PRD), the following features are planned for future sprints:
+- **Business & Technical Documents:** Auto-generate structured PRDs and Technical Specifications directly from the Launch Room workflow.
+- **Team Recommendation Engine:** AI analyzes the project scope and recommends an exact team structure (e.g., 1 Senior Solidity Dev, 1 Fractional PM) before beginning the talent matching phase.
+- **On-Chain Smart Contract Escrow:** Transition the milestone payments from simulated escrow to real on-chain smart contracts (e.g., Polygon/Arbitrum).
+- **GitHub Integration:** Automatically synchronize AI-generated Kanban tickets into an actual GitHub repository.
