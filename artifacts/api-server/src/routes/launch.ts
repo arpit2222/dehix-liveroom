@@ -32,7 +32,8 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     ];
 
     if (isOpenAiEnabled) {
-      const prompt = `You are a technical project manager taking in a raw idea for a Web3 or AI project.
+      try {
+        const prompt = `You are a technical project manager taking in a raw idea for a Web3 or AI project.
 Read the client's raw idea and output exactly 4 highly-relevant clarifying questions to help define the scope better.
 DO NOT include any markdown, intro text, or numbering. Return a pure JSON array of strings.
 
@@ -41,18 +42,21 @@ Idea: "${rawIdea}"
 Expected format:
 ["Question 1?", "Question 2?", "Question 3?", "Question 4?"]`;
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [{ role: "user", content: prompt }],
-        max_completion_tokens: 1024,
-      });
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [{ role: "user", content: prompt }],
+          max_completion_tokens: 1024,
+        });
 
-      const content = completion.choices[0]?.message?.content ?? "[]";
-      const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
-      try {
-        questionsList = JSON.parse(cleaned);
-      } catch (e) {
-        req.log.warn({ e, content }, "Failed to parse AI questions array, using fallbacks");
+        const content = completion.choices[0]?.message?.content ?? "[]";
+        const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
+        try {
+          questionsList = JSON.parse(cleaned);
+        } catch (e) {
+          req.log.warn({ e, content }, "Failed to parse AI questions array, using fallbacks");
+        }
+      } catch (err) {
+        req.log.error({ err }, "OpenAI generate questions failed, using fallback");
       }
     }
 
@@ -102,7 +106,8 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
     let brief = null;
 
     if (isOpenAiEnabled) {
-      const prompt = `You are a senior Web3 project manager. A client has described a project and answered clarifying questions. Extract and return ONLY valid JSON — no markdown, no explanation.
+      try {
+        const prompt = `You are a senior Web3 project manager. A client has described a project and answered clarifying questions. Extract and return ONLY valid JSON — no markdown, no explanation.
 
 ${fullDescription}
 
@@ -143,15 +148,21 @@ Return this exact JSON structure:
   "suggestedTotalBudgetUsd": number
 }`;
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [{ role: "user", content: prompt }],
-        max_completion_tokens: 4096,
-      });
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [{ role: "user", content: prompt }],
+          max_completion_tokens: 4096,
+        });
 
-      const content = completion.choices[0]?.message?.content ?? "{}";
-      const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
-      brief = JSON.parse(cleaned);
+        const content = completion.choices[0]?.message?.content ?? "{}";
+        const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
+        brief = JSON.parse(cleaned);
+      } catch (err) {
+        req.log.error({ err }, "OpenAI generate scope failed, using fallback");
+        // @ts-ignore
+        const mockAi = await import("../lib/mockAi.js");
+        brief = mockAi.mockScope(fullDescription);
+      }
     } else {
       // @ts-ignore
       const mockAi = await import("../lib/mockAi.js");
