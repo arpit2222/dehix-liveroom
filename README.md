@@ -50,7 +50,7 @@ Full-stack real-time AI-powered Web3 hiring platform. A standard npm monorepo wi
 
 - Azure OpenAI uses deployment names in API calls. Set `AZURE_OPENAI_DEPLOYMENT` to the deployment name you created in Azure, not just the model family name.
 - If you add image, audio, or transcription deployments later, set `AZURE_OPENAI_IMAGE_DEPLOYMENT`, `AZURE_OPENAI_AUDIO_DEPLOYMENT`, or `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT`.
-- If Azure OpenAI variables are missing, the app falls back to the included mock AI responses for local development.
+- If Azure OpenAI variables are missing or the Azure request fails, AI endpoints return an error instead of generated placeholder content.
 
 ## Demo Accounts
 

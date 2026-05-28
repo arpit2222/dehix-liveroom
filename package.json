@@ -13,7 +13,8 @@
   },
   "private": true,
   "workspaces": [
-    "artifacts/*",
+    "artifacts/api-server",
+    "artifacts/dehix-live-room",
     "lib/*",
     "lib/integrations/*",
     "scripts"

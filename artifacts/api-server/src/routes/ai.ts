@@ -1,7 +1,5 @@
-import { Router } from "express";
-import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled } from "../lib/openai.js";
-import { mockScope, mockChat, mockNda, mockMilestones } from "../lib/mockAi.js";
-import { mockPitchDeck, mockTechnicalDeck, mockBdStrategy, mockSow, mockProjectBrief, type ConvMsg } from "../lib/mockDocs.js";
+import { Router, type Response } from "express";
+import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled, missingAzureOpenAiEnvVars } from "../lib/openai.js";
 import { GeneratedDoc } from "../models/GeneratedDoc.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
@@ -17,6 +15,29 @@ import { ScopeProjectBody, MatchTalentBody, GenerateNdaBody, SuggestMilestonesBo
 
 const router = Router();
 
+type ConvMsg = {
+  userName: string;
+  message: string;
+  isAi: boolean;
+};
+
+function requireAzureOpenAi(res: Response): boolean {
+  if (isAzureOpenAiEnabled) {
+    return true;
+  }
+
+  res.status(503).json({
+    error: "Azure OpenAI is not configured",
+    missingEnvVars: missingAzureOpenAiEnvVars,
+  });
+  return false;
+}
+
+function sendAzureOpenAiError(req: AuthRequest, res: Response, err: unknown, message: string) {
+  req.log.error({ err }, message);
+  res.status(502).json({ error: message });
+}
+
 router.post("/scope", requireAuth, async (req: AuthRequest, res) => {
   const parsed = ScopeProjectBody.safeParse(req.body);
   if (!parsed.success) {
@@ -25,8 +46,7 @@ router.post("/scope", requireAuth, async (req: AuthRequest, res) => {
   }
   const { description } = parsed.data;
 
-  if (!isAzureOpenAiEnabled) {
-    res.json(mockScope(description));
+  if (!requireAzureOpenAi(res)) {
     return;
   }
 
@@ -83,8 +103,7 @@ Return this exact JSON structure:
     const brief = JSON.parse(cleaned);
     res.json(brief);
   } catch (err) {
-    req.log.error({ err }, "scope error — falling back to mock");
-    res.json(mockScope(description));
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate project scope");
   }
 });
 
@@ -176,11 +195,7 @@ router.post("/generate-nda", requireAuth, async (req: AuthRequest, res) => {
       );
     };
 
-    if (!isAzureOpenAiEnabled) {
-      const content = mockNda(room.title, business?.name ?? "Business", talentNames, milestoneList);
-      const saved = await saveNda(content);
-      RoomActivity.create({ roomId: String(roomId), type: "nda_generated", meta: { by: req.userId } }).catch(() => {});
-      res.json({ _id: saved._id, roomId: saved.roomId, content: saved.content, signedBy: saved.signedBy, status: saved.status, createdAt: saved.createdAt });
+    if (!requireAzureOpenAi(res)) {
       return;
     }
 
@@ -214,20 +229,7 @@ Date: ${new Date().toLocaleDateString()}`;
     RoomActivity.create({ roomId: String(roomId), type: "nda_generated", meta: { by: req.userId } }).catch(() => {});
     res.json({ _id: saved._id, roomId: saved.roomId, content: saved.content, signedBy: saved.signedBy, status: saved.status, createdAt: saved.createdAt });
   } catch (err) {
-    req.log.error({ err }, "generateNda error — falling back to mock");
-    try {
-      const room = await LiveRoom.findById(roomId);
-      const content = mockNda(room?.title ?? "Project", "Business", "", "");
-      const saved = await Nda.findOneAndUpdate(
-        { roomId },
-        { content, status: "draft", signedBy: [] },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
-      res.json({ _id: saved._id, roomId: saved.roomId, content: saved.content, signedBy: saved.signedBy, status: saved.status, createdAt: saved.createdAt });
-    } catch (fallbackErr) {
-      req.log.error({ fallbackErr }, "generateNda fallback also failed");
-      res.status(500).json({ error: "Failed to generate NDA. Please try again." });
-    }
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate NDA");
   }
 });
 
@@ -239,8 +241,7 @@ router.post("/suggest-milestones", requireAuth, async (req: AuthRequest, res) =>
   }
   const { roomId, totalBudgetUsd = 50000 } = parsed.data;
 
-  if (!isAzureOpenAiEnabled) {
-    res.json(mockMilestones(totalBudgetUsd));
+  if (!requireAzureOpenAi(res)) {
     return;
   }
 
@@ -272,8 +273,7 @@ Return array of: [{ "title": string, "description": string, "amountUsd": number,
     const suggestions = JSON.parse(cleaned);
     res.json(suggestions);
   } catch (err) {
-    req.log.error({ err }, "suggestMilestones error — falling back to mock");
-    res.json(mockMilestones(totalBudgetUsd));
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to suggest milestones");
   }
 });
 
@@ -295,9 +295,7 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
     };
   });
 
-  if (!isAzureOpenAiEnabled) {
-    const room = await LiveRoom.findById(roomId).catch(() => null);
-    res.json({ reply: mockChat(message, room?.title ?? "your project") });
+  if (!requireAzureOpenAi(res)) {
     return;
   }
 
@@ -340,9 +338,7 @@ Format your response with clear structure when the answer is complex (use number
     const reply = completion.choices[0]?.message?.content ?? "I couldn't process that request.";
     res.json({ reply });
   } catch (err) {
-    req.log.error({ err }, "aiChat error — falling back to mock");
-    const room = await LiveRoom.findById(roomId).catch(() => null);
-    res.json({ reply: mockChat(message, room?.title ?? "your project") });
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate chat reply");
   }
 });
 
@@ -354,18 +350,7 @@ router.post("/suggest-tickets", requireAuth, async (req: AuthRequest, res) => {
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
     const brief = room.aiScopedBrief as any;
 
-    if (!isAzureOpenAiEnabled) {
-      const mockTickets = [
-        { title: "Set up monorepo structure and CI/CD pipeline", estimatedHours: 8, milestoneNumber: 1 },
-        { title: "Design and implement core data models", estimatedHours: 12, milestoneNumber: 1 },
-        { title: "Build authentication and authorization system", estimatedHours: 10, milestoneNumber: 1 },
-        { title: "Implement smart contract core logic", estimatedHours: 24, milestoneNumber: 2 },
-        { title: "Write comprehensive unit tests", estimatedHours: 16, milestoneNumber: 2 },
-        { title: "Build frontend dashboard skeleton", estimatedHours: 20, milestoneNumber: 2 },
-        { title: "Integrate wallet connection (MetaMask / WalletConnect)", estimatedHours: 10, milestoneNumber: 3 },
-        { title: "Security audit and penetration testing", estimatedHours: 20, milestoneNumber: 3 },
-      ];
-      res.json(mockTickets);
+    if (!requireAzureOpenAi(res)) {
       return;
     }
 
@@ -389,8 +374,7 @@ Return array of: [{ "title": string (concise action), "description": string (1 s
     const tickets = JSON.parse(cleaned);
     res.json(tickets);
   } catch (err) {
-    req.log.error({ err }, "suggestTickets error");
-    res.status(500).json({ error: "Failed to suggest tickets" });
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to suggest tickets");
   }
 });
 
@@ -422,51 +406,40 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
 
   const title = `${roomTitle} — ${DOC_TYPE_LABELS[documentType]}`;
 
+  if (!requireAzureOpenAi(res)) {
+    return;
+  }
+
+  const conversationText = convMsgs
+    .map((m) => `${m.isAi ? "AI" : m.userName}: ${m.message}`)
+    .join("\n");
+
+  const systemPrompts: Record<string, string> = {
+    pitch_deck: `You are an expert startup pitch deck writer. Given a research conversation, generate a comprehensive, investor-ready pitch deck in plain text format. Include: Cover, Problem, Solution, Market Size (TAM/SAM/SOM with real numbers), Product, Business Model, Traction, Competitive Landscape, Team, Financials, and The Ask. Use ═══ and ─── dividers for sections. Be specific with numbers.`,
+    technical_deck: `You are a senior solutions architect. Generate a comprehensive technical deck from this research conversation. Include: Architecture overview (ASCII diagram), Tech Stack, Key Technical Decisions (with rationale and tradeoffs), Security Model, Scalability Plan, Data Models, API Design, Development Roadmap. Use ═══ and ─── dividers.`,
+    bd_strategy: `You are a go-to-market strategy expert. Generate a comprehensive BD strategy document from this research conversation. Include: Market Opportunity, Target Segments (with profiles and pain points), Value Proposition, Go-to-Market Strategy, Partnership Strategy, Revenue Model & Pricing, Sales Process, KPIs. Be specific with numbers and channels.`,
+    sow: `You are a contract specialist. Generate a detailed Statement of Work from this research conversation. Include: Project Overview, Scope of Work (in scope and out of scope), Deliverables with milestones, Timeline, Team Structure with rates, Assumptions & Dependencies, Change Management, Payment Schedule (milestone escrow), Acceptance Criteria, Signature blocks. Be legally precise.`,
+    project_brief: `You are a senior product manager. Generate a comprehensive project brief from this research conversation. Include: Executive Summary, Background & Context, Business Objectives, Functional Requirements (P0/P1/P2), Technical Requirements, Out of Scope, Success Criteria, Risk Register, and Stakeholders. Be thorough and specific.`,
+  };
+
   let content: string;
 
-  if (!isAzureOpenAiEnabled) {
-    switch (documentType) {
-      case "pitch_deck":      content = mockPitchDeck(convMsgs, roomTitle); break;
-      case "technical_deck":  content = mockTechnicalDeck(convMsgs, roomTitle); break;
-      case "bd_strategy":     content = mockBdStrategy(convMsgs, roomTitle); break;
-      case "sow":             content = mockSow(convMsgs, roomTitle); break;
-      case "project_brief":   content = mockProjectBrief(convMsgs, roomTitle); break;
-      default:                content = mockProjectBrief(convMsgs, roomTitle);
+  try {
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
+      messages: [
+        { role: "system", content: systemPrompts[documentType] ?? systemPrompts.project_brief },
+        { role: "user", content: `Here is the research conversation to base the document on:\n\n${conversationText}\n\nProject title: ${roomTitle}\n\nGenerate the full document now.` },
+      ],
+      max_completion_tokens: 3000,
+    });
+    content = completion.choices[0]?.message?.content ?? "";
+    if (!content) {
+      throw new Error("Empty response from Azure OpenAI");
     }
-  } else {
-    const conversationText = convMsgs
-      .map((m) => `${m.isAi ? "AI" : m.userName}: ${m.message}`)
-      .join("\n");
-
-    const systemPrompts: Record<string, string> = {
-      pitch_deck: `You are an expert startup pitch deck writer. Given a research conversation, generate a comprehensive, investor-ready pitch deck in plain text format. Include: Cover, Problem, Solution, Market Size (TAM/SAM/SOM with real numbers), Product, Business Model, Traction, Competitive Landscape, Team, Financials, and The Ask. Use ═══ and ─── dividers for sections. Be specific with numbers.`,
-      technical_deck: `You are a senior solutions architect. Generate a comprehensive technical deck from this research conversation. Include: Architecture overview (ASCII diagram), Tech Stack, Key Technical Decisions (with rationale and tradeoffs), Security Model, Scalability Plan, Data Models, API Design, Development Roadmap. Use ═══ and ─── dividers.`,
-      bd_strategy: `You are a go-to-market strategy expert. Generate a comprehensive BD strategy document from this research conversation. Include: Market Opportunity, Target Segments (with profiles and pain points), Value Proposition, Go-to-Market Strategy, Partnership Strategy, Revenue Model & Pricing, Sales Process, KPIs. Be specific with numbers and channels.`,
-      sow: `You are a contract specialist. Generate a detailed Statement of Work from this research conversation. Include: Project Overview, Scope of Work (in scope and out of scope), Deliverables with milestones, Timeline, Team Structure with rates, Assumptions & Dependencies, Change Management, Payment Schedule (milestone escrow), Acceptance Criteria, Signature blocks. Be legally precise.`,
-      project_brief: `You are a senior product manager. Generate a comprehensive project brief from this research conversation. Include: Executive Summary, Background & Context, Business Objectives, Functional Requirements (P0/P1/P2), Technical Requirements, Out of Scope, Success Criteria, Risk Register, and Stakeholders. Be thorough and specific.`,
-    };
-
-    try {
-      const completion = await azureOpenai.chat.completions.create({
-        model: azureOpenAiDeployment,
-        messages: [
-          { role: "system", content: systemPrompts[documentType] ?? systemPrompts.project_brief },
-          { role: "user", content: `Here is the research conversation to base the document on:\n\n${conversationText}\n\nProject title: ${roomTitle}\n\nGenerate the full document now.` },
-        ],
-        max_completion_tokens: 3000,
-      });
-      content = completion.choices[0]?.message?.content ?? "";
-      if (!content) throw new Error("Empty response from AI");
-    } catch (err) {
-      req.log.error({ err }, "generate-document AI error — falling back to mock");
-      switch (documentType) {
-        case "pitch_deck":     content = mockPitchDeck(convMsgs, roomTitle); break;
-        case "technical_deck": content = mockTechnicalDeck(convMsgs, roomTitle); break;
-        case "bd_strategy":    content = mockBdStrategy(convMsgs, roomTitle); break;
-        case "sow":            content = mockSow(convMsgs, roomTitle); break;
-        default:               content = mockProjectBrief(convMsgs, roomTitle);
-      }
-    }
+  } catch (err) {
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate document");
+    return;
   }
 
   try {
@@ -498,12 +471,7 @@ router.post("/chat-summary", requireAuth, async (req: AuthRequest, res) => {
       .map((m: any) => `${m.isAi ? "AI" : m.userName}: ${m.message}`)
       .join("\n");
 
-    if (!isAzureOpenAiEnabled) {
-      res.json({
-        summary: `Key discussion points for ${room?.title ?? "this project"}:\n• Project scope and technical architecture discussed\n• Team roles and skill requirements identified\n• Timeline and budget estimates reviewed\n• Next steps: finalize roles and begin talent matching`,
-        keyDecisions: ["Proceed with Web3-native architecture", "Use milestone-based escrow", "Begin talent search immediately"],
-        actionItems: ["Generate AI brief", "Invite verified talent", "Set up Google Meet", "Create project milestones"],
-      });
+    if (!requireAzureOpenAi(res)) {
       return;
     }
 
@@ -530,8 +498,7 @@ Project: ${room?.title ?? "Web3 Project"}`;
     const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
     res.json(JSON.parse(cleaned));
   } catch (err) {
-    req.log.error({ err }, "chatSummary error");
-    res.status(500).json({ error: "Failed to summarize conversation" });
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to summarize conversation");
   }
 });
 

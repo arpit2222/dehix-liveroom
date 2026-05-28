@@ -1,5 +1,5 @@
-import { Router } from "express";
-import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled } from "../lib/openai.js";
+import { Router, type Response } from "express";
+import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled, missingAzureOpenAiEnvVars } from "../lib/openai.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { LaunchSession } from "../models/LaunchSession.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
@@ -7,6 +7,23 @@ import { LiveRoom } from "../models/LiveRoom.js";
 import { CreateLaunchSessionBody, ScopeLaunchSessionBody } from "@workspace/api-zod";
 
 const router = Router();
+
+function requireAzureOpenAi(res: Response): boolean {
+  if (isAzureOpenAiEnabled) {
+    return true;
+  }
+
+  res.status(503).json({
+    error: "Azure OpenAI is not configured",
+    missingEnvVars: missingAzureOpenAiEnvVars,
+  });
+  return false;
+}
+
+function sendAzureOpenAiError(req: AuthRequest, res: Response, err: unknown, message: string) {
+  req.log.error({ err }, message);
+  res.status(502).json({ error: message });
+}
 
 router.post("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = CreateLaunchSessionBody.safeParse(req.body);
@@ -16,24 +33,12 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   }
   const { rawIdea, projectTitle } = parsed.data;
 
+  if (!requireAzureOpenAi(res)) {
+    return;
+  }
+
   try {
-    const session = await LaunchSession.create({
-      userId: req.userId,
-      rawIdea,
-      projectTitle,
-      status: "clarifying",
-    });
-
-    let questionsList: string[] = [
-      "Who is the target audience for this project?",
-      "Are you looking to build an MVP or a full-scale product?",
-      "What is your rough budget for this project?",
-      "What is the expected timeline for delivery?",
-    ];
-
-    if (isAzureOpenAiEnabled) {
-      try {
-        const prompt = `You are a technical project manager taking in a raw idea for a Web3 or AI project.
+    const prompt = `You are a technical project manager taking in a raw idea for a Web3 or AI project.
 Read the client's raw idea and output exactly 4 highly-relevant clarifying questions to help define the scope better.
 DO NOT include any markdown, intro text, or numbering. Return a pure JSON array of strings.
 
@@ -42,23 +47,30 @@ Idea: "${rawIdea}"
 Expected format:
 ["Question 1?", "Question 2?", "Question 3?", "Question 4?"]`;
 
-        const completion = await azureOpenai.chat.completions.create({
-          model: azureOpenAiDeployment,
-          messages: [{ role: "user", content: prompt }],
-          max_completion_tokens: 1024,
-        });
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
+      messages: [{ role: "user", content: prompt }],
+      max_completion_tokens: 1024,
+    });
 
-        const content = completion.choices[0]?.message?.content ?? "[]";
-        const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
-        try {
-          questionsList = JSON.parse(cleaned);
-        } catch (e) {
-          req.log.warn({ e, content }, "Failed to parse AI questions array, using fallbacks");
-        }
-      } catch (err) {
-        req.log.error({ err }, "Azure OpenAI generate questions failed, using fallback");
-      }
+    const content = completion.choices[0]?.message?.content ?? "[]";
+    const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
+    const parsedQuestions: unknown = JSON.parse(cleaned);
+
+    if (!Array.isArray(parsedQuestions) || parsedQuestions.length === 0) {
+      throw new Error("Azure OpenAI returned invalid questions payload");
     }
+
+    const questionsList = parsedQuestions
+      .map((question) => String(question).trim())
+      .filter(Boolean);
+
+    const session = await LaunchSession.create({
+      userId: req.userId,
+      rawIdea,
+      projectTitle,
+      status: "clarifying",
+    });
 
     const clarifications = await Promise.all(
       questionsList.slice(0, 5).map((q, i) =>
@@ -72,8 +84,7 @@ Expected format:
 
     res.status(201).json({ session, questions: clarifications });
   } catch (err) {
-    req.log.error({ err }, "createLaunchSession error");
-    res.status(500).json({ error: "Failed to create launch session" });
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate launch questions");
   }
 });
 
@@ -81,6 +92,10 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
   const parsed = ScopeLaunchSessionBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input" });
+    return;
+  }
+
+  if (!requireAzureOpenAi(res)) {
     return;
   }
 
@@ -103,11 +118,7 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
 
     const fullDescription = `Original Idea: ${session.rawIdea}\n\nClarifications:\n${clarificationsText}`;
 
-    let brief = null;
-
-    if (isAzureOpenAiEnabled) {
-      try {
-        const prompt = `You are a senior Web3 project manager. A client has described a project and answered clarifying questions. Extract and return ONLY valid JSON — no markdown, no explanation.
+    const prompt = `You are a senior Web3 project manager. A client has described a project and answered clarifying questions. Extract and return ONLY valid JSON — no markdown, no explanation.
 
 ${fullDescription}
 
@@ -148,26 +159,15 @@ Return this exact JSON structure:
   "suggestedTotalBudgetUsd": number
 }`;
 
-        const completion = await azureOpenai.chat.completions.create({
-          model: azureOpenAiDeployment,
-          messages: [{ role: "user", content: prompt }],
-          max_completion_tokens: 4096,
-        });
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
+      messages: [{ role: "user", content: prompt }],
+      max_completion_tokens: 4096,
+    });
 
-        const content = completion.choices[0]?.message?.content ?? "{}";
-        const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
-        brief = JSON.parse(cleaned);
-      } catch (err) {
-        req.log.error({ err }, "Azure OpenAI generate scope failed, using fallback");
-        // @ts-ignore
-        const mockAi = await import("../lib/mockAi.js");
-        brief = mockAi.mockScope(fullDescription);
-      }
-    } else {
-      // @ts-ignore
-      const mockAi = await import("../lib/mockAi.js");
-      brief = mockAi.mockScope(fullDescription);
-    }
+    const content = completion.choices[0]?.message?.content ?? "{}";
+    const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
+    const brief = JSON.parse(cleaned);
 
     const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const room = await LiveRoom.create({
@@ -184,8 +184,7 @@ Return this exact JSON structure:
 
     res.json(room);
   } catch (err) {
-    req.log.error({ err }, "scopeLaunchSession error");
-    res.status(500).json({ error: "Failed to scope launch session" });
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to scope launch session");
   }
 });
 

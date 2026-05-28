@@ -246,7 +246,8 @@ export default function LiveRoom() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ message, roomId, history: historyPayload }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Azure OpenAI request failed");
       const reply = data.reply ?? "I couldn't process that.";
       const aiMsg = { userId: "ai", userName: "DEHIX AI", message: reply, isAi: true };
       if (isFirebaseEnabled && db) {
@@ -254,8 +255,8 @@ export default function LiveRoom() {
       } else {
         addLocalMessage(aiMsg);
       }
-    } catch {
-      addLocalMessage({ userId: "ai", userName: "DEHIX AI", message: "Sorry, I hit an error. Please try again.", isAi: true });
+    } catch (e: any) {
+      addLocalMessage({ userId: "ai", userName: "DEHIX AI", message: e.message ?? "Azure OpenAI request failed", isAi: true });
     } finally {
       setAiLoading(false);
     }
@@ -376,7 +377,10 @@ export default function LiveRoom() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ messages: chatMessages.map(m => ({ userName: m.userName, message: m.message, isAi: m.isAi })), roomId }),
       });
-      if (!res.ok) throw new Error("Failed to summarize");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? "Failed to summarize");
+      }
       const data = await res.json();
       setChatSummary(data);
     } catch (e: any) {
@@ -459,7 +463,10 @@ export default function LiveRoom() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ description: room?.rawDescription ?? room?.title, roomId }),
       });
-      if (!scopeRes.ok) throw new Error("AI scoping failed");
+      if (!scopeRes.ok) {
+        const err = await scopeRes.json().catch(() => ({}));
+        throw new Error(err.error ?? "AI scoping failed");
+      }
       const briefData = await scopeRes.json();
       const saveRes = await fetch(`/api/rooms/${roomId}/brief`, {
         method: "PUT",
@@ -1783,7 +1790,7 @@ export default function LiveRoom() {
                 </p>
                 {!isFirebaseEnabled && !docMode && (
                   <p className="text-[10px] text-muted-foreground/30 leading-relaxed px-2">
-                    Chat is session-only in demo mode.
+                    Chat is session-only without Firebase.
                   </p>
                 )}
               </div>
