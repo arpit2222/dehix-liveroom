@@ -1,22 +1,25 @@
 import fs from "node:fs";
-import OpenAI, { toFile } from "openai";
+import { AzureOpenAI, toFile } from "openai";
 import { Buffer } from "node:buffer";
 
-export const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+const imageDeployment = process.env.AZURE_OPENAI_IMAGE_DEPLOYMENT ?? process.env.AZURE_OPENAI_DEPLOYMENT;
+
+export const openai = new AzureOpenAI({
+  apiKey: process.env.AZURE_OPENAI_API_KEY ?? "placeholder",
+  endpoint: process.env.AZURE_OPENAI_ENDPOINT ?? "https://placeholder.openai.azure.com",
+  apiVersion: process.env.AZURE_OPENAI_API_VERSION ?? "2024-10-21",
 });
 
 /**
  * Generate an image and return as Buffer.
- * Uses gpt-image-1 model via Replit AI Integrations.
+ * Uses the configured Azure OpenAI image deployment.
  */
 export async function generateImageBuffer(
   prompt: string,
   size: "1024x1024" | "512x512" | "256x256" = "1024x1024"
 ): Promise<Buffer> {
   const response = await openai.images.generate({
-    model: "gpt-image-1",
+    model: imageDeployment ?? "gpt-image-1",
     prompt,
     size,
   });
@@ -26,7 +29,7 @@ export async function generateImageBuffer(
 
 /**
  * Edit/combine multiple images into a composite.
- * Uses gpt-image-1 model via Replit AI Integrations.
+ * Uses the configured Azure OpenAI image deployment.
  */
 export async function editImages(
   imageFiles: string[],
@@ -42,7 +45,7 @@ export async function editImages(
   );
 
   const response = await openai.images.edit({
-    model: "gpt-image-1",
+    model: imageDeployment ?? "gpt-image-1",
     image: images,
     prompt,
   });

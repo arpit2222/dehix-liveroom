@@ -1,18 +1,29 @@
-import OpenAI from "openai";
+import { AzureOpenAI } from "openai";
 
-if (!process.env.AI_INTEGRATIONS_OPENAI_BASE_URL) {
+const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+const apiKey = process.env.AZURE_OPENAI_API_KEY;
+const apiVersion = process.env.AZURE_OPENAI_API_VERSION;
+
+if (!endpoint) {
   throw new Error(
-    "AI_INTEGRATIONS_OPENAI_BASE_URL must be set. Did you forget to provision the OpenAI AI integration?",
+    "AZURE_OPENAI_ENDPOINT must be set for Azure OpenAI.",
   );
 }
 
-if (!process.env.AI_INTEGRATIONS_OPENAI_API_KEY) {
+if (!apiKey) {
   throw new Error(
-    "AI_INTEGRATIONS_OPENAI_API_KEY must be set. Did you forget to provision the OpenAI AI integration?",
+    "AZURE_OPENAI_API_KEY must be set for Azure OpenAI.",
   );
 }
 
-export const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+if (!apiVersion) {
+  throw new Error("AZURE_OPENAI_API_VERSION must be set for Azure OpenAI.");
+}
+
+export const azureOpenAiDeployment = process.env.AZURE_OPENAI_DEPLOYMENT;
+
+export const openai = new AzureOpenAI({
+  apiKey,
+  endpoint,
+  apiVersion,
 });

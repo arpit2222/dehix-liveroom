@@ -1,8 +1,22 @@
-import OpenAI from "openai";
+import { AzureOpenAI } from "openai";
 
-const baseURL = process.env["AI_INTEGRATIONS_OPENAI_BASE_URL"];
-const apiKey = process.env["AI_INTEGRATIONS_OPENAI_API_KEY"];
+const endpoint = process.env["AZURE_OPENAI_ENDPOINT"];
+const apiKey = process.env["AZURE_OPENAI_API_KEY"];
+const apiVersion = process.env["AZURE_OPENAI_API_VERSION"];
+const deployment = process.env["AZURE_OPENAI_DEPLOYMENT"];
 
-export const isOpenAiEnabled = !!(apiKey && apiKey !== "placeholder" && baseURL);
+export const isAzureOpenAiEnabled = !!(
+  apiKey &&
+  apiKey !== "placeholder" &&
+  endpoint &&
+  apiVersion &&
+  deployment
+);
 
-export const openai = new OpenAI({ baseURL, apiKey: apiKey ?? "placeholder" });
+export const azureOpenAiDeployment = deployment ?? "placeholder";
+
+export const azureOpenai = new AzureOpenAI({
+  apiKey: apiKey ?? "placeholder",
+  endpoint: endpoint ?? "https://placeholder.openai.azure.com",
+  apiVersion: apiVersion ?? "2024-10-21",
+});

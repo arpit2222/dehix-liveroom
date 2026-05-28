@@ -254,7 +254,7 @@ Backend:
 • Socket.io (WebSocket layer)
 • Mongoose + MongoDB (primary data store)
 • Firebase Firestore (real-time chat)
-• OpenAI API (AI features)
+• Azure OpenAI (AI features)
 • JWT (stateless authentication)
 • Pino (structured logging)
 
@@ -295,11 +295,11 @@ millions of concurrent connections out of the box.
 Trade-off: Vendor dependency — mitigated by keeping chat as a 
 separable module with clean abstraction layer.
 
-Decision 5: OpenAI via Replit proxy
-Rationale: Eliminates API key management, automatic rate limiting, 
-cost controls built in.
-Trade-off: Dependency on proxy uptime — mitigated by mock fallbacks 
-for all AI features.
+Decision 5: Azure OpenAI for AI workflows
+Rationale: Uses a managed Azure OpenAI deployment with explicit
+environment-based key and endpoint configuration.
+Trade-off: Dependency on Azure OpenAI availability — mitigated by mock
+fallbacks for all AI features.
 
 
 SECTION 4 — DATA MODELS
@@ -491,7 +491,7 @@ PHASE 3: Direct Sales (Months 6–12)
 ${LINE}
 TIER 1 — Integration Partners
   • ${c.isWeb3 ? "Wallet providers: MetaMask, Coinbase Wallet (login + credential signing)" : "Auth providers: Clerk, Auth0 (identity verification)"}
-  • AI: OpenAI, Anthropic (document generation + matching)
+  • AI: Azure OpenAI, Anthropic (document generation + matching)
   • Video: Google Meet, Whereby, Loom (collaboration layer)
   • Value: Mutual distribution; we drive users to their tools
 
@@ -694,7 +694,7 @@ Client responsibilities:
 □ ${c.isWeb3 ? "Fund escrow wallet with full project amount before work begins" : "Initiate escrow payment per milestone schedule"}
 
 Technical dependencies:
-□ OpenAI API access (Provider responsibility)
+□ Azure OpenAI access (Provider responsibility)
 □ ${c.isWeb3 ? "Alchemy/Infura node access (Provider responsibility)" : "Cloud infrastructure provisioned (Provider responsibility)"}
 □ Firebase project created (Provider responsibility)
 □ Domain + SSL certificate (Client responsibility)

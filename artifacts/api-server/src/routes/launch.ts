@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { openai, isOpenAiEnabled } from "../lib/openai.js";
+import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled } from "../lib/openai.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { LaunchSession } from "../models/LaunchSession.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
@@ -31,7 +31,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       "What is the expected timeline for delivery?",
     ];
 
-    if (isOpenAiEnabled) {
+    if (isAzureOpenAiEnabled) {
       try {
         const prompt = `You are a technical project manager taking in a raw idea for a Web3 or AI project.
 Read the client's raw idea and output exactly 4 highly-relevant clarifying questions to help define the scope better.
@@ -42,8 +42,8 @@ Idea: "${rawIdea}"
 Expected format:
 ["Question 1?", "Question 2?", "Question 3?", "Question 4?"]`;
 
-        const completion = await openai.chat.completions.create({
-          model: "gpt-5.4",
+        const completion = await azureOpenai.chat.completions.create({
+          model: azureOpenAiDeployment,
           messages: [{ role: "user", content: prompt }],
           max_completion_tokens: 1024,
         });
@@ -56,7 +56,7 @@ Expected format:
           req.log.warn({ e, content }, "Failed to parse AI questions array, using fallbacks");
         }
       } catch (err) {
-        req.log.error({ err }, "OpenAI generate questions failed, using fallback");
+        req.log.error({ err }, "Azure OpenAI generate questions failed, using fallback");
       }
     }
 
@@ -105,7 +105,7 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
 
     let brief = null;
 
-    if (isOpenAiEnabled) {
+    if (isAzureOpenAiEnabled) {
       try {
         const prompt = `You are a senior Web3 project manager. A client has described a project and answered clarifying questions. Extract and return ONLY valid JSON — no markdown, no explanation.
 
@@ -148,8 +148,8 @@ Return this exact JSON structure:
   "suggestedTotalBudgetUsd": number
 }`;
 
-        const completion = await openai.chat.completions.create({
-          model: "gpt-5.4",
+        const completion = await azureOpenai.chat.completions.create({
+          model: azureOpenAiDeployment,
           messages: [{ role: "user", content: prompt }],
           max_completion_tokens: 4096,
         });
@@ -158,7 +158,7 @@ Return this exact JSON structure:
         const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
         brief = JSON.parse(cleaned);
       } catch (err) {
-        req.log.error({ err }, "OpenAI generate scope failed, using fallback");
+        req.log.error({ err }, "Azure OpenAI generate scope failed, using fallback");
         // @ts-ignore
         const mockAi = await import("../lib/mockAi.js");
         brief = mockAi.mockScope(fullDescription);

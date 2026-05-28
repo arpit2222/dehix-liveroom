@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { openai, isOpenAiEnabled } from "../lib/openai.js";
+import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled } from "../lib/openai.js";
 import { mockScope, mockChat, mockNda, mockMilestones } from "../lib/mockAi.js";
 import { mockPitchDeck, mockTechnicalDeck, mockBdStrategy, mockSow, mockProjectBrief, type ConvMsg } from "../lib/mockDocs.js";
 import { GeneratedDoc } from "../models/GeneratedDoc.js";
@@ -25,7 +25,7 @@ router.post("/scope", requireAuth, async (req: AuthRequest, res) => {
   }
   const { description } = parsed.data;
 
-  if (!isOpenAiEnabled) {
+  if (!isAzureOpenAiEnabled) {
     res.json(mockScope(description));
     return;
   }
@@ -72,8 +72,8 @@ Return this exact JSON structure:
   "suggestedTotalBudgetUsd": number
 }`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5.4",
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 4096,
     });
@@ -176,7 +176,7 @@ router.post("/generate-nda", requireAuth, async (req: AuthRequest, res) => {
       );
     };
 
-    if (!isOpenAiEnabled) {
+    if (!isAzureOpenAiEnabled) {
       const content = mockNda(room.title, business?.name ?? "Business", talentNames, milestoneList);
       const saved = await saveNda(content);
       RoomActivity.create({ roomId: String(roomId), type: "nda_generated", meta: { by: req.userId } }).catch(() => {});
@@ -203,8 +203,8 @@ Project: ${room.title}
 Milestones: ${milestones.map((m) => m.title).join(", ")}
 Date: ${new Date().toLocaleDateString()}`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5.4",
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 2048,
     });
@@ -239,7 +239,7 @@ router.post("/suggest-milestones", requireAuth, async (req: AuthRequest, res) =>
   }
   const { roomId, totalBudgetUsd = 50000 } = parsed.data;
 
-  if (!isOpenAiEnabled) {
+  if (!isAzureOpenAiEnabled) {
     res.json(mockMilestones(totalBudgetUsd));
     return;
   }
@@ -261,8 +261,8 @@ Total Budget: $${totalBudgetUsd}
 
 Return array of: [{ "title": string, "description": string, "amountUsd": number, "dueDate": "YYYY-MM-DD" }]`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5.4",
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 1024,
     });
@@ -295,7 +295,7 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
     };
   });
 
-  if (!isOpenAiEnabled) {
+  if (!isAzureOpenAiEnabled) {
     const room = await LiveRoom.findById(roomId).catch(() => null);
     res.json({ reply: mockChat(message, room?.title ?? "your project") });
     return;
@@ -331,8 +331,8 @@ Format your response with clear structure when the answer is complex (use number
       { role: "user", content: message },
     ];
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5.4",
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
       messages,
       max_completion_tokens: 1024,
     });
@@ -354,7 +354,7 @@ router.post("/suggest-tickets", requireAuth, async (req: AuthRequest, res) => {
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
     const brief = room.aiScopedBrief as any;
 
-    if (!isOpenAiEnabled) {
+    if (!isAzureOpenAiEnabled) {
       const mockTickets = [
         { title: "Set up monorepo structure and CI/CD pipeline", estimatedHours: 8, milestoneNumber: 1 },
         { title: "Design and implement core data models", estimatedHours: 12, milestoneNumber: 1 },
@@ -378,8 +378,8 @@ Complexity: ${brief?.complexity ?? "high"}
 
 Return array of: [{ "title": string (concise action), "description": string (1 sentence), "estimatedHours": number, "milestoneNumber": 1|2|3 }]`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5.4",
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 1024,
     });
@@ -424,7 +424,7 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
 
   let content: string;
 
-  if (!isOpenAiEnabled) {
+  if (!isAzureOpenAiEnabled) {
     switch (documentType) {
       case "pitch_deck":      content = mockPitchDeck(convMsgs, roomTitle); break;
       case "technical_deck":  content = mockTechnicalDeck(convMsgs, roomTitle); break;
@@ -447,8 +447,8 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
     };
 
     try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-5.4",
+      const completion = await azureOpenai.chat.completions.create({
+        model: azureOpenAiDeployment,
         messages: [
           { role: "system", content: systemPrompts[documentType] ?? systemPrompts.project_brief },
           { role: "user", content: `Here is the research conversation to base the document on:\n\n${conversationText}\n\nProject title: ${roomTitle}\n\nGenerate the full document now.` },
@@ -498,7 +498,7 @@ router.post("/chat-summary", requireAuth, async (req: AuthRequest, res) => {
       .map((m: any) => `${m.isAi ? "AI" : m.userName}: ${m.message}`)
       .join("\n");
 
-    if (!isOpenAiEnabled) {
+    if (!isAzureOpenAiEnabled) {
       res.json({
         summary: `Key discussion points for ${room?.title ?? "this project"}:\n• Project scope and technical architecture discussed\n• Team roles and skill requirements identified\n• Timeline and budget estimates reviewed\n• Next steps: finalize roles and begin talent matching`,
         keyDecisions: ["Proceed with Web3-native architecture", "Use milestone-based escrow", "Begin talent search immediately"],
@@ -520,8 +520,8 @@ ${conversation}
 
 Project: ${room?.title ?? "Web3 Project"}`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5.4",
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
       messages: [{ role: "user", content: prompt }],
       max_completion_tokens: 512,
     });
