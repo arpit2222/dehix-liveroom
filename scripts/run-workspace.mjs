@@ -4,7 +4,8 @@ import { spawn } from "node:child_process";
 
 const target = process.argv[2];
 const rootDir = path.resolve(import.meta.dirname, "..");
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmCommand = process.env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
+const npmArgPrefix = process.env.npm_execpath ? [process.env.npm_execpath] : [];
 
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -51,7 +52,7 @@ const baseEnv = {
 
 const targets = {
   api: {
-    args: ["run", "dev", "--workspace=@workspace/api-server"],
+    args: [...npmArgPrefix, "run", "dev", "--workspace=@workspace/api-server"],
     env: {
       ...baseEnv,
       NODE_ENV: baseEnv.NODE_ENV ?? "development",
@@ -59,7 +60,7 @@ const targets = {
     },
   },
   client: {
-    args: ["run", "dev", "--workspace=@workspace/dehix-live-room"],
+    args: [...npmArgPrefix, "run", "dev", "--workspace=@workspace/dehix-live-room"],
     env: {
       ...baseEnv,
       PORT: baseEnv.CLIENT_PORT ?? "5173",
@@ -67,7 +68,7 @@ const targets = {
     },
   },
   seed: {
-    args: ["run", "seed", "--workspace=@workspace/api-server"],
+    args: [...npmArgPrefix, "run", "seed", "--workspace=@workspace/api-server"],
     env: baseEnv,
   },
 };
