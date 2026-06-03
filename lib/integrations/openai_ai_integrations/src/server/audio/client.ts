@@ -1,4 +1,4 @@
-import OpenAI, { toFile } from "openai";
+import { AzureOpenAI, toFile } from "openai";
 import { Buffer } from "node:buffer";
 import { spawn } from "child_process";
 import { writeFile, unlink, readFile } from "fs/promises";
@@ -6,9 +6,13 @@ import { randomUUID } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
 
-export const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+const audioDeployment = process.env.AZURE_OPENAI_AUDIO_DEPLOYMENT ?? process.env.AZURE_OPENAI_DEPLOYMENT ?? "gpt-audio";
+const transcriptionDeployment = process.env.AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT ?? "gpt-4o-mini-transcribe";
+
+export const openai = new AzureOpenAI({
+  apiKey: process.env.AZURE_OPENAI_API_KEY ?? "placeholder",
+  endpoint: process.env.AZURE_OPENAI_ENDPOINT ?? "https://placeholder.openai.azure.com",
+  apiVersion: process.env.AZURE_OPENAI_API_VERSION ?? "2024-10-21",
 });
 
 export type AudioFormat = "wav" | "mp3" | "webm" | "mp4" | "ogg" | "unknown";
@@ -105,7 +109,7 @@ export async function voiceChat(
 ): Promise<{ transcript: string; audioResponse: Buffer }> {
   const audioBase64 = audioBuffer.toString("base64");
   const response = await openai.chat.completions.create({
-    model: "gpt-audio",
+    model: audioDeployment,
     modalities: ["text", "audio"],
     audio: { voice, format: outputFormat },
     messages: [{
@@ -132,7 +136,7 @@ export async function voiceChatStream(
 ): Promise<AsyncIterable<{ type: "transcript" | "audio"; data: string }>> {
   const audioBase64 = audioBuffer.toString("base64");
   const stream = await openai.chat.completions.create({
-    model: "gpt-audio",
+    model: audioDeployment,
     modalities: ["text", "audio"],
     audio: { voice, format: "pcm16" },
     messages: [{
@@ -165,7 +169,7 @@ export async function textToSpeech(
   format: "wav" | "mp3" | "flac" | "opus" | "pcm16" = "wav"
 ): Promise<Buffer> {
   const response = await openai.chat.completions.create({
-    model: "gpt-audio",
+    model: audioDeployment,
     modalities: ["text", "audio"],
     audio: { voice, format },
     messages: [
@@ -183,7 +187,7 @@ export async function textToSpeechStream(
   voice: "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer" = "alloy"
 ): Promise<AsyncIterable<string>> {
   const stream = await openai.chat.completions.create({
-    model: "gpt-audio",
+    model: audioDeployment,
     modalities: ["text", "audio"],
     audio: { voice, format: "pcm16" },
     messages: [
@@ -212,7 +216,7 @@ export async function speechToText(
   const file = await toFile(audioBuffer, `audio.${format}`);
   const response = await openai.audio.transcriptions.create({
     file,
-    model: "gpt-4o-mini-transcribe",
+    model: transcriptionDeployment,
   });
   return response.text;
 }
@@ -225,7 +229,7 @@ export async function speechToTextStream(
   const file = await toFile(audioBuffer, `audio.${format}`);
   const stream = await openai.audio.transcriptions.create({
     file,
-    model: "gpt-4o-mini-transcribe",
+    model: transcriptionDeployment,
     stream: true,
   });
 

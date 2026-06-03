@@ -10,14 +10,14 @@ import pRetry from "p-retry";
  *
  * USAGE:
  * ```typescript
- * import { batchProcess, isRateLimitError } from "./replit_integrations/batch";
+ * import { batchProcess, isRateLimitError } from "./azure-openai/batch";
  *
  * const results = await batchProcess(
  *   artworks,
  *   async (artwork) => {
  *     // Your custom LLM logic here
  *     const response = await openai.chat.completions.create({
- *       model: "gpt-5.4",
+ *       model: process.env.AZURE_OPENAI_DEPLOYMENT,
  *       messages: [{ role: "user", content: `Categorize: ${artwork.name}` }],
  *       response_format: { type: "json_object" },
  *     });

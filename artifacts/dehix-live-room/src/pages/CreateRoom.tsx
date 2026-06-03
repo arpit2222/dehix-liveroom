@@ -1,56 +1,307 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
-import { useCreateLaunchSession, useScopeLaunchSession } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
+type WizardPhase = "idea" | "analysis" | "technical" | "blueprint" | "recommendations";
+
+type Question = {
+  _id: string;
+  question: string;
+  required?: boolean;
+};
+
+type AnalysisResult = {
+  needs_clarification?: boolean;
+  clarifying_questions?: string[];
+  region_used?: string;
+  idea_summary?: string;
+  research_analysis?: {
+    market_demand?: string;
+    target_audience?: string;
+    competitor_analysis?: string;
+    competitive_moat?: string;
+    revenue_model?: string;
+    unit_economics?: string;
+    cost_estimation?: string;
+    go_to_market_strategy?: string;
+    risks?: string[];
+    suggestions?: string[];
+    assumptions?: string[];
+    swot?: {
+      strengths?: string[];
+      weaknesses?: string[];
+      opportunities?: string[];
+      threats?: string[];
+    };
+    dimensional_scores?: Record<string, number>;
+    overall_score?: number;
+    final_verdict?: string;
+    verdict_reasoning?: string;
+  };
+};
+
+type BlueprintResult = Record<string, unknown>;
+
+type TalentRecommendation = {
+  talentId: string;
+  user: {
+    _id: string;
+    name: string;
+    email?: string | null;
+    avatarUrl?: string | null;
+    walletAddress?: string | null;
+    isOnline?: boolean;
+  };
+  matchedRole: {
+    roleTitle: string;
+    skillDomain: string;
+    requiredLevel: 1 | 2;
+    minReputation: number;
+    estimatedHours: number;
+  };
+  credential: {
+    skillDomain: string;
+    level: 1 | 2;
+    reputationScore: number;
+    githubScore: number;
+    interviewScore: number;
+    projectsCompleted: number;
+  };
+  finalScore: number;
+  scoreBreakdown: {
+    talentScore: number;
+    skillMatchScore: number;
+    budgetFitScore: number;
+    availabilityScore: number;
+    openSourceScore: number;
+    previousWorkScore: number;
+    reputationScore: number;
+  };
+  estimatedHourlyRateUsd: number;
+  estimatedProjectCostUsd: number;
+  reasons: string[];
+};
+
+type TalentRecommendationReport = {
+  budgetUsd?: number | null;
+  roleCount: number;
+  recommendations: TalentRecommendation[];
+};
+
 const EXAMPLE_PROMPTS = [
-  "Build a cross-chain DeFi yield aggregator that rebalances positions across Ethereum, Arbitrum, and Optimism. Need smart contract security, a React dashboard, and a ZK-proof privacy layer. Budget ~$80k, 10-12 weeks.",
-  "Create a Web3 social platform where creators can tokenize their content as NFTs. Users can subscribe with tokens, tip in ETH, and creators get 90% revenue. React Native mobile app + Solana smart contracts.",
-  "Build an AI-powered hiring platform for DAOs — talent creates on-chain reputation, businesses post bounties, AI matches and scores candidates. Full-stack with IPFS storage and multi-sig escrow payments.",
+  "A platform that helps small restaurants predict daily ingredient demand, reduce food waste, and auto-create purchase lists for suppliers.",
+  "A marketplace where local fitness coaches can sell short video programs, manage paid communities, and track client progress.",
+  "An AI assistant for real estate agents that qualifies leads, writes listing descriptions, schedules visits, and keeps client follow-ups organized.",
 ];
+
+const SCORE_LABELS: Record<string, string> = {
+  market_opportunity: "Market opportunity",
+  problem_clarity: "Problem clarity",
+  solution_differentiation: "Differentiation",
+  execution_feasibility: "Execution feasibility",
+  revenue_potential: "Revenue potential",
+};
+
+const FALLBACK_MANDATORY_QUESTIONS: Question[] = [
+  {
+    _id: "primary_user_goal",
+    question: "Who will use this product first, and what is the main thing they should be able to do on day one?",
+    required: true,
+  },
+  {
+    _id: "first_platform",
+    question: "Where should the first version launch: web app, mobile app, admin dashboard, API, or something else?",
+    required: true,
+  },
+  {
+    _id: "must_have_features",
+    question: "What are the top 3 must-have features for the first usable version?",
+    required: true,
+  },
+  {
+    _id: "accounts_payments_data",
+    question: "Will the product need user accounts, payments, file uploads, chat, maps, AI, blockchain, or third-party integrations?",
+    required: true,
+  },
+  {
+    _id: "constraints",
+    question: "Do you have any fixed timeline, budget range, compliance needs, or existing tools/data that the team must work with?",
+    required: true,
+  },
+];
+const BLUEPRINT_SECTION_ORDER = [
+  "executive_summary",
+  "problem_definition",
+  "target_users",
+  "product_strategy",
+  "mvp_definition",
+  "user_journey",
+  "technical_architecture",
+  "security_and_compliance",
+  "development_roadmap",
+  "team_requirements",
+  "cost_estimation",
+  "business_model",
+  "go_to_market",
+  "risk_analysis",
+  "founder_recommendations",
+  "final_verdict",
+  "next_options",
+];
+
+function getToken() {
+  return localStorage.getItem("dehix_token");
+}
+
+async function readApiError(res: Response, fallback: string) {
+  const data = await res.json().catch(() => ({}));
+  return data?.error ?? fallback;
+}
+
+function humanizeKey(key: string) {
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function isPrimitive(value: unknown) {
+  return value === null || ["string", "number", "boolean"].includes(typeof value);
+}
+
+function formatPrimitive(value: unknown) {
+  if (value === null || value === undefined) return "Not available";
+  return String(value);
+}
+
+function formatCurrency(value?: number | null) {
+  if (!value || !Number.isFinite(value)) return "Budget not found";
+  return `$${Math.round(value).toLocaleString()}`;
+}
+
+function ScorePill({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-border/40 bg-background/40 p-3">
+      <div className="flex items-center justify-between gap-3 text-xs mb-2">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono text-foreground">{value}</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+        <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function SectionList({ title, items }: { title: string; items?: string[] }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      <ul className="space-y-1.5">
+        {items.map((item, index) => (
+          <li key={index} className="text-sm text-muted-foreground leading-relaxed flex gap-2">
+            <span className="text-primary shrink-0">-</span>
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function BlueprintValue({ value }: { value: unknown }): ReactNode {
+  if (isPrimitive(value)) {
+    return <p className="text-sm text-muted-foreground leading-relaxed">{formatPrimitive(value)}</p>;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <p className="text-sm text-muted-foreground">Not available</p>;
+    }
+
+    if (value.every(isPrimitive)) {
+      return (
+        <ul className="space-y-1.5">
+          {value.map((item, index) => (
+            <li key={index} className="text-sm text-muted-foreground leading-relaxed flex gap-2">
+              <span className="text-primary shrink-0">-</span>
+              <span>{formatPrimitive(item)}</span>
+            </li>
+          ))}
+        </ul>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        {value.map((item, index) => (
+          <div key={index} className="rounded-lg border border-border/40 bg-background/35 p-3">
+            <BlueprintValue value={item} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return (
+      <div className="grid gap-3 md:grid-cols-2">
+        {Object.entries(value as Record<string, unknown>).map(([key, nestedValue]) => (
+          <div key={key} className="space-y-1 rounded-lg border border-border/40 bg-background/35 p-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{humanizeKey(key)}</h4>
+            <BlueprintValue value={nestedValue} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function BlueprintReport({ blueprint }: { blueprint: BlueprintResult }) {
+  const orderedSections = BLUEPRINT_SECTION_ORDER
+    .filter((key) => blueprint[key] !== undefined)
+    .map((key) => [key, blueprint[key]] as const);
+  const remainingSections = Object.entries(blueprint).filter(
+    ([key]) => !BLUEPRINT_SECTION_ORDER.includes(key) && key !== "step"
+  );
+
+  return (
+    <div className="space-y-5">
+      {[...orderedSections, ...remainingSections].map(([key, value]) => (
+        <section key={key} className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
+          <h2 className="text-lg font-semibold">{humanizeKey(key)}</h2>
+          <BlueprintValue value={value} />
+        </section>
+      ))}
+    </div>
+  );
+}
 
 export default function CreateRoom() {
   const [, navigate] = useLocation();
   const { isAuthenticated, user } = useAuth();
-  
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+
+  const [phase, setPhase] = useState<WizardPhase>("idea");
   const [description, setDescription] = useState("");
   const [sessionData, setSessionData] = useState<any>(null);
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [blueprint, setBlueprint] = useState<BlueprintResult | null>(null);
+  const [mandatoryQuestions, setMandatoryQuestions] = useState<Question[]>([]);
+  const [optionalQuestions, setOptionalQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [roomData, setRoomData] = useState<any>(null);
   const [error, setError] = useState("");
-
-  const createSession = useCreateLaunchSession({
-    mutation: {
-      onSuccess: (data: any) => {
-        setSessionData(data);
-        setError("");
-        setStep(2);
-      },
-      onError: (err: any) => {
-        const msg = err?.data?.error ?? "Failed to initialize session. Please try again.";
-        setError(msg);
-        toast.error(msg);
-      },
-    },
-  });
-
-  const scopeSession = useScopeLaunchSession({
-    mutation: {
-      onSuccess: (data: any) => {
-        setRoomData(data);
-        setError("");
-        setStep(3);
-      },
-      onError: (err: any) => {
-        const msg = err?.data?.error ?? "Failed to generate scope. Please try again.";
-        setError(msg);
-        toast.error(msg);
-      },
-    },
-  });
+  const [validating, setValidating] = useState(false);
+  const [loadingQuestions, setLoadingQuestions] = useState(false);
+  const [generatingBlueprint, setGeneratingBlueprint] = useState(false);
+  const [creatingRoom, setCreatingRoom] = useState(false);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [downloadingBlueprintPdf, setDownloadingBlueprintPdf] = useState(false);
+  const [talentRecommendationReport, setTalentRecommendationReport] = useState<TalentRecommendationReport | null>(null);
 
   if (!isAuthenticated || user?.role !== "business") {
     return (
@@ -63,229 +314,627 @@ export default function CreateRoom() {
     );
   }
 
-  const handleStartClarification = () => {
-    if (!description.trim() || description.length < 20) return;
-    const title = description.trim().slice(0, 60) + (description.length > 60 ? "..." : "");
-    createSession.mutate({ data: { rawIdea: description, projectTitle: title } });
+  const validateIdea = async () => {
+    if (!description.trim() || description.length < 20 || validating) return;
+    setValidating(true);
+    setError("");
+    try {
+      const title = description.trim().slice(0, 60) + (description.length > 60 ? "..." : "");
+      const res = await fetch("/api/launch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${getToken()}`,
+        },
+        body: JSON.stringify({ rawIdea: description.trim(), projectTitle: title }),
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Azure OpenAI failed to analyze the business idea"));
+      }
+      const data = await res.json();
+      setSessionData(data.session);
+      setAnalysis(data.analysis);
+      setBlueprint(null);
+      setPhase("analysis");
+    } catch (err: any) {
+      const msg = err?.message ?? "Failed to analyze idea";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setValidating(false);
+    }
   };
 
-  const handleGenerateScope = () => {
-    if (!sessionData) return;
-    const answersArray = Object.entries(answers).map(([questionId, answer]) => ({
-      questionId,
-      answer,
-    }));
-    scopeSession.mutate({
-      id: sessionData.session._id,
-      data: { answers: answersArray },
-    });
+  const downloadValidationPdf = async () => {
+    if (!sessionData?._id || downloadingPdf) return;
+    setDownloadingPdf(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/launch/${sessionData._id}/business-validation.pdf`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Failed to download analysis PDF"));
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = url;
+      link.download = `business-analysis-${sessionData._id}.pdf`;
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      const msg = err?.message ?? "Failed to download analysis PDF";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setDownloadingPdf(false);
+    }
   };
+
+  const downloadBlueprintPdf = async () => {
+    if (!sessionData?._id || downloadingBlueprintPdf) return;
+    setDownloadingBlueprintPdf(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/launch/${sessionData._id}/business-blueprint.pdf`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Failed to download blueprint PDF"));
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = url;
+      link.download = `business-blueprint-${sessionData._id}.pdf`;
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      const msg = err?.message ?? "Failed to download blueprint PDF";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setDownloadingBlueprintPdf(false);
+    }
+  };
+
+  const loadTechnicalQuestions = async () => {
+    if (!sessionData?._id || loadingQuestions) return;
+    setLoadingQuestions(true);
+    setError("");
+    setMandatoryQuestions(FALLBACK_MANDATORY_QUESTIONS);
+    setOptionalQuestions([]);
+    try {
+      const res = await fetch(`/api/launch/${sessionData._id}/technical-questions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Azure OpenAI failed to prepare technical questions"));
+      }
+      const data = await res.json();
+      const fetchedMandatoryQuestions = Array.isArray(data.mandatoryQuestions) && data.mandatoryQuestions.length > 0
+        ? data.mandatoryQuestions
+        : FALLBACK_MANDATORY_QUESTIONS;
+      setMandatoryQuestions(fetchedMandatoryQuestions);
+      setOptionalQuestions(Array.isArray(data.optionalQuestions) ? data.optionalQuestions : []);
+      if (data.optionalQuestionError) {
+        toast.warning(data.optionalQuestionError);
+      }
+      setPhase("technical");
+    } catch (err: any) {
+      const msg = err?.message ?? "Failed to prepare technical questions";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setLoadingQuestions(false);
+    }
+  };
+
+  const generateBlueprint = async () => {
+    if (!sessionData?._id || generatingBlueprint) return;
+    const missing = mandatoryQuestions.filter((question) => !answers[question._id]?.trim());
+    if (missing.length > 0) {
+      toast.error("Please answer all mandatory questions");
+      return;
+    }
+
+    setGeneratingBlueprint(true);
+    setError("");
+    try {
+      const allQuestions = [...mandatoryQuestions, ...optionalQuestions];
+      const answersPayload = allQuestions
+        .map((question) => ({
+          questionId: question._id,
+          answer: answers[question._id]?.trim() ?? "",
+        }))
+        .filter((item) => item.answer);
+
+      const res = await fetch(`/api/launch/${sessionData._id}/blueprint`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${getToken()}`,
+        },
+        body: JSON.stringify({ answers: answersPayload }),
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Azure OpenAI failed to generate the blueprint"));
+      }
+      const data = await res.json();
+      setBlueprint(data.blueprint ?? null);
+      if (data.session) {
+        setSessionData(data.session);
+      }
+      setPhase("blueprint");
+    } catch (err: any) {
+      const msg = err?.message ?? "Failed to generate blueprint";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setGeneratingBlueprint(false);
+    }
+  };
+
+
+  const generateTalentRecommendations = async () => {
+    if (!sessionData?._id || loadingRecommendations) return;
+    setLoadingRecommendations(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/launch/${sessionData._id}/talent-recommendations`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Failed to generate talent recommendations"));
+      }
+      const data = await res.json();
+      setTalentRecommendationReport({
+        budgetUsd: data.budgetUsd ?? null,
+        roleCount: data.roleCount ?? 0,
+        recommendations: Array.isArray(data.recommendations) ? data.recommendations : [],
+      });
+      setPhase("recommendations");
+    } catch (err: any) {
+      const msg = err?.message ?? "Failed to generate talent recommendations";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setLoadingRecommendations(false);
+    }
+  };
+  const enterRoomDashboard = async () => {
+    if (!sessionData?._id || creatingRoom) return;
+    const missing = mandatoryQuestions.filter((question) => !answers[question._id]?.trim());
+    if (missing.length > 0) {
+      toast.error("Please answer all mandatory questions");
+      setPhase("technical");
+      return;
+    }
+
+    setCreatingRoom(true);
+    setError("");
+    try {
+      const allQuestions = [...mandatoryQuestions, ...optionalQuestions];
+      const answersPayload = allQuestions
+        .map((question) => ({
+          questionId: question._id,
+          answer: answers[question._id]?.trim() ?? "",
+        }))
+        .filter((item) => item.answer);
+
+      const res = await fetch(`/api/launch/${sessionData._id}/scope`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${getToken()}`,
+        },
+        body: JSON.stringify({ answers: answersPayload }),
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Azure OpenAI failed to create the room dashboard"));
+      }
+      const room = await res.json();
+      navigate(`/room/${room._id}`);
+    } catch (err: any) {
+      const msg = err?.message ?? "Failed to enter room dashboard";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setCreatingRoom(false);
+    }
+  };
+  const research = analysis?.research_analysis;
+  const scores = research?.dimensional_scores ?? {};
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="sticky top-0 z-10 border-b border-border/40 bg-background/80 backdrop-blur-sm">
-        <div className="max-w-4xl mx-auto px-6 h-14 flex items-center gap-3">
+      <div className="sticky top-0 z-10 border-b border-border/40 bg-background/90 backdrop-blur-sm">
+        <div className="max-w-5xl mx-auto px-6 h-14 flex items-center gap-3">
           <button onClick={() => navigate("/business/dashboard")} className="text-muted-foreground hover:text-foreground text-sm transition-colors">
-            ← Dashboard
+            Back to dashboard
           </button>
           <span className="text-border">/</span>
           <span className="text-sm font-medium">New Live Room</span>
-          {sessionData?.session?.projectTitle && (
+          {sessionData?.projectTitle && (
             <>
               <span className="text-border">/</span>
-              <span className="text-sm text-muted-foreground truncate max-w-[200px]">{sessionData.session.projectTitle}</span>
+              <span className="text-sm text-muted-foreground truncate max-w-[240px]">{sessionData.projectTitle}</span>
             </>
           )}
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-6 py-12">
-        {/* STEP 1: RAW IDEA */}
-        {step === 1 && (
-          <>
-            <div className="mb-10">
-              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Step 1 of 3</div>
-              <h1 className="text-3xl font-bold tracking-tight mb-3">Describe your project</h1>
-              <p className="text-muted-foreground max-w-xl">
-                Write your raw idea in plain English. Our AI will analyze it and ask a few clarifying questions before defining the scope.
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              <div className="rounded-xl border border-border/50 bg-card overflow-hidden focus-within:border-primary/40 transition-colors">
-                <textarea
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Be specific about the tech stack, features, timeline, and budget..."
-                  className="w-full bg-transparent text-foreground placeholder:text-muted-foreground/40 resize-none p-6 outline-none text-base leading-relaxed min-h-[180px]"
-                  rows={7}
-                />
-                <div className="border-t border-border/40 px-6 py-3 flex items-center justify-between gap-3">
-                  <span className={`text-xs ${description.length < 20 ? "text-muted-foreground/40" : description.length > 1000 ? "text-amber-400" : "text-muted-foreground"}`}>
-                    {description.length} chars {description.length < 20 && description.length > 0 ? "— add more detail" : ""}
-                  </span>
-                  <Button
-                    onClick={handleStartClarification}
-                    disabled={createSession.isPending || description.trim().length < 20}
-                    className="glow-purple"
-                  >
-                    {createSession.isPending ? (
-                      <span className="flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full border border-white/30 border-t-white animate-spin" />
-                        Analyzing...
-                      </span>
-                    ) : "Next: Clarify Details →"}
-                  </Button>
-                </div>
+      <div className="max-w-5xl mx-auto px-6 py-10">
+        <div className="mb-8 grid gap-2 text-xs sm:grid-cols-4">
+          {[
+            ["idea", "1", "Idea input"],
+            ["analysis", "1", "Business analysis"],
+            ["technical", "2", "Blueprint report"],
+            ["recommendations", "3", "Talent matches"],
+          ].map(([key, number, label]) => {
+            const active = phase === key || (phase === "blueprint" && key === "technical");
+            return (
+              <div
+                key={key}
+                className={`rounded-lg border px-3 py-2 ${
+                  active
+                    ? "border-primary/50 bg-primary/10 text-primary"
+                    : "border-border/40 bg-card/40 text-muted-foreground"
+                }`}
+              >
+                <span className="font-mono mr-2">{number}</span>
+                {label}
               </div>
+            );
+          })}
+        </div>
 
-              {error && (
-                <div className="rounded-md bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive">{error}</div>
-              )}
-
-              <div>
-                <div className="text-xs text-muted-foreground/60 mb-2 uppercase tracking-wider font-medium">Try an example</div>
-                <div className="space-y-2">
-                  {EXAMPLE_PROMPTS.map((p, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setDescription(p)}
-                      className="w-full text-left text-xs text-muted-foreground/60 hover:text-muted-foreground border border-border/30 hover:border-border/60 rounded-lg px-4 py-3 transition-all leading-relaxed"
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </>
+        {error && (
+          <div className="mb-6 rounded-md bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive">{error}</div>
         )}
 
-        {/* STEP 2: CLARIFICATION */}
-        {step === 2 && sessionData && (
-          <div className="space-y-8">
-            <div className="mb-8">
-              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Step 2 of 3</div>
-              <h1 className="text-3xl font-bold tracking-tight mb-3">Let's refine the scope</h1>
-              <p className="text-muted-foreground max-w-xl">
-                The AI needs a bit more context to generate an accurate project brief, milestones, and team requirements.
+        {phase === "idea" && (
+          <div className="space-y-6">
+            <div>
+              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Phase 1</div>
+              <h1 className="text-3xl font-bold tracking-tight mb-3">Analyze the business idea first</h1>
+              <p className="text-muted-foreground max-w-2xl">
+                Describe the idea in normal language. Azure OpenAI will only analyze the business side here: market, audience,
+                competitors, revenue, risks, score, and verdict.
               </p>
             </div>
 
-            <div className="space-y-6">
-              {sessionData.questions.map((q: any) => (
-                <div key={q._id} className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">{q.question}</label>
-                  <textarea
-                    value={answers[q._id] || ""}
-                    onChange={(e) => setAnswers({ ...answers, [q._id]: e.target.value })}
-                    placeholder="Provide more detail here..."
-                    className="w-full bg-card text-foreground placeholder:text-muted-foreground/40 resize-none p-4 rounded-xl border border-border/50 outline-none text-sm focus:border-primary/40 transition-colors min-h-[100px]"
-                  />
-                </div>
-              ))}
+            <div className="rounded-xl border border-border/50 bg-card overflow-hidden focus-within:border-primary/40 transition-colors">
+              <textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="Example: I want to build a platform for local restaurants to predict demand and reduce ingredient waste..."
+                className="w-full bg-transparent text-foreground placeholder:text-muted-foreground/40 resize-none p-6 outline-none text-base leading-relaxed min-h-[190px]"
+                rows={7}
+              />
+              <div className="border-t border-border/40 px-6 py-3 flex items-center justify-between gap-3">
+                <span className={`text-xs ${description.length < 20 ? "text-muted-foreground/40" : "text-muted-foreground"}`}>
+                  {description.length} chars {description.length < 20 && description.length > 0 ? "- add more detail" : ""}
+                </span>
+                <Button onClick={validateIdea} disabled={validating || description.trim().length < 20} className="glow-purple">
+                  {validating ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full border border-white/30 border-t-white animate-spin" />
+                      Analyzing...
+                    </span>
+                  ) : "Analyze business"}
+                </Button>
+              </div>
             </div>
 
-            {error && (
-              <div className="rounded-md bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive">{error}</div>
+            <div>
+              <div className="text-xs text-muted-foreground/60 mb-2 uppercase tracking-wider font-medium">Try an example</div>
+              <div className="grid gap-2">
+                {EXAMPLE_PROMPTS.map((prompt, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setDescription(prompt)}
+                    className="w-full text-left text-xs text-muted-foreground/70 hover:text-muted-foreground border border-border/30 hover:border-border/60 rounded-lg px-4 py-3 transition-all leading-relaxed"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {phase === "analysis" && analysis && (
+          <div className="space-y-7">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Phase 1 output</div>
+                <h1 className="text-3xl font-bold tracking-tight mb-3">Business analysis result</h1>
+                <p className="text-muted-foreground max-w-2xl">{analysis.idea_summary}</p>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <Button variant="outline" onClick={() => setPhase("idea")} disabled={loadingQuestions || downloadingPdf}>
+                  Edit idea
+                </Button>
+                <Button variant="outline" onClick={downloadValidationPdf} disabled={downloadingPdf}>
+                  {downloadingPdf ? "Preparing..." : "Download PDF"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-xl border border-border/50 bg-card p-4">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Verdict</div>
+                <div className="text-xl font-semibold">{research?.final_verdict ?? "Not available"}</div>
+                <p className="text-xs text-muted-foreground mt-2 leading-relaxed">{research?.verdict_reasoning}</p>
+              </div>
+              <div className="rounded-xl border border-border/50 bg-card p-4">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Overall score</div>
+                <div className="text-3xl font-bold font-mono text-primary">{research?.overall_score ?? "N/A"}</div>
+                <div className="text-xs text-muted-foreground mt-1">out of 10</div>
+              </div>
+              <div className="rounded-xl border border-border/50 bg-card p-4">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Region</div>
+                <div className="text-lg font-semibold">{analysis.region_used ?? "Not specified"}</div>
+                {analysis.needs_clarification && (
+                  <p className="text-xs text-amber-400 mt-2">AI marked this idea as needing more clarity.</p>
+                )}
+              </div>
+            </div>
+
+            {analysis.needs_clarification && analysis.clarifying_questions && analysis.clarifying_questions.length > 0 && (
+              <div className="rounded-xl border border-amber-800/40 bg-amber-950/10 p-4">
+                <h3 className="text-sm font-semibold text-amber-300 mb-2">Clarifying questions from AI</h3>
+                <ul className="space-y-1.5">
+                  {analysis.clarifying_questions.map((question, index) => (
+                    <li key={index} className="text-sm text-amber-100/80">{index + 1}. {question}</li>
+                  ))}
+                </ul>
+              </div>
             )}
 
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
+                <h2 className="font-semibold">Market view</h2>
+                <p className="text-sm text-muted-foreground leading-relaxed">{research?.market_demand}</p>
+                <p className="text-sm text-muted-foreground leading-relaxed">{research?.target_audience}</p>
+                <p className="text-sm text-muted-foreground leading-relaxed">{research?.competitor_analysis}</p>
+              </div>
+              <div className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
+                <h2 className="font-semibold">Business model</h2>
+                <p className="text-sm text-muted-foreground leading-relaxed">{research?.revenue_model}</p>
+                <p className="text-sm text-muted-foreground leading-relaxed">{research?.unit_economics}</p>
+                <p className="text-sm text-muted-foreground leading-relaxed">{research?.cost_estimation}</p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/50 bg-card p-5">
+              <h2 className="font-semibold mb-4">Dimensional scores</h2>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                {Object.entries(SCORE_LABELS).map(([key, label]) => (
+                  <div key={key} className="rounded-lg border border-border/40 bg-background/40 p-3">
+                    <div className="text-xs text-muted-foreground mb-1">{label}</div>
+                    <div className="text-xl font-semibold font-mono">{scores[key] ?? "N/A"}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-5 md:grid-cols-2">
+              <SectionList title="Risks" items={research?.risks} />
+              <SectionList title="Suggestions" items={research?.suggestions} />
+              <SectionList title="Strengths" items={research?.swot?.strengths} />
+              <SectionList title="Weaknesses" items={research?.swot?.weaknesses} />
+            </div>
+
             <div className="flex items-center gap-3 pt-4 border-t border-border/40">
-              <Button
-                className="flex-1 glow-purple h-12 text-base"
-                onClick={handleGenerateScope}
-                disabled={scopeSession.isPending}
-              >
-                {scopeSession.isPending ? (
+              <Button className="flex-1 glow-purple h-12 text-base" onClick={loadTechnicalQuestions} disabled={loadingQuestions}>
+                {loadingQuestions ? (
                   <span className="flex items-center gap-2">
                     <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                    Generating Full Project Scope...
+                    Preparing questions...
                   </span>
-                ) : "Generate Project Plan →"}
-              </Button>
-              <Button variant="outline" className="h-12" onClick={() => setStep(1)} disabled={scopeSession.isPending}>
-                Back
+                ) : "Move to technical questions"}
               </Button>
             </div>
           </div>
         )}
 
-        {/* STEP 3: REVIEW AI SCOPE */}
-        {step === 3 && roomData?.aiScopedBrief && (
-          <div className="space-y-6">
-            <div className="mb-8">
-              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Step 3 of 3 — Ready to Build</div>
-              <h1 className="text-2xl font-bold tracking-tight mb-1">{roomData.aiScopedBrief.projectTitle}</h1>
-              <p className="text-muted-foreground">{roomData.aiScopedBrief.projectSummary}</p>
+        {phase === "technical" && (
+          <div className="space-y-8">
+            <div>
+              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Phase 2 intake</div>
+              <h1 className="text-3xl font-bold tracking-tight mb-3">Answer blueprint questions</h1>
+              <p className="text-muted-foreground max-w-2xl">
+                The fixed questions are mandatory. The optional questions are generated from the business idea and make the final blueprint more specific.
+              </p>
             </div>
 
-            <div className="grid sm:grid-cols-3 gap-4">
-              <div className="rounded-xl border border-border/50 bg-card p-4 text-center">
-                <div className="text-2xl font-bold font-mono">{roomData.aiScopedBrief.estimatedWeeks}w</div>
-                <div className="text-xs text-muted-foreground mt-0.5">Timeline</div>
-              </div>
-              <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 p-4 text-center">
-                <div className="text-2xl font-bold font-mono text-emerald-400">${roomData.aiScopedBrief.suggestedTotalBudgetUsd?.toLocaleString()}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">Estimated Budget</div>
-              </div>
-              <div className={`rounded-xl border p-4 text-center ${
-                roomData.aiScopedBrief.complexity === "low" ? "border-emerald-800/40 bg-emerald-950/20" :
-                roomData.aiScopedBrief.complexity === "medium" ? "border-amber-800/40 bg-amber-950/20" :
-                "border-rose-800/40 bg-rose-950/20"
-              }`}>
-                <div className={`text-2xl font-bold capitalize ${
-                  roomData.aiScopedBrief.complexity === "low" ? "text-emerald-400" :
-                  roomData.aiScopedBrief.complexity === "medium" ? "text-amber-400" :
-                  "text-rose-400"
-                }`}>{roomData.aiScopedBrief.complexity}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">Complexity</div>
-              </div>
-            </div>
+            <div className="space-y-6">
+              {mandatoryQuestions.map((question, index) => (
+                <div key={question._id} className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">
+                    {index + 1}. {question.question} <span className="text-primary">*</span>
+                  </label>
+                  <textarea
+                    value={answers[question._id] || ""}
+                    onChange={(event) => setAnswers({ ...answers, [question._id]: event.target.value })}
+                    placeholder="Answer in plain language..."
+                    className="w-full bg-card text-foreground placeholder:text-muted-foreground/40 resize-none p-4 rounded-xl border border-border/50 outline-none text-sm focus:border-primary/40 transition-colors min-h-[92px]"
+                  />
+                </div>
+              ))}
 
-            <div className="grid sm:grid-cols-3 gap-4">
-              <div>
-                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Required Team Roles ({roomData.aiScopedBrief.roles?.length})</div>
-                <div className="space-y-1.5">
-                  {roomData.aiScopedBrief.roles?.map((r: any, i: number) => (
-                    <div key={i} className="text-xs bg-card rounded-lg px-3 py-2 border border-border/40">
-                      <div className="font-medium text-foreground truncate">{r.roleTitle}</div>
-                      <div className="text-primary truncate">{r.skillDomain}</div>
-                      <div className="text-muted-foreground/60 font-mono">L{r.requiredLevel} · {r.estimatedHours}h</div>
+              {optionalQuestions.length > 0 && (
+                <div className="pt-4 border-t border-border/40 space-y-4">
+                  <div>
+                    <h2 className="text-base font-semibold">Optional AI questions</h2>
+                    <p className="text-xs text-muted-foreground mt-1">These are based on your specific idea. Answer the ones you can.</p>
+                  </div>
+                  {optionalQuestions.map((question, index) => (
+                    <div key={question._id} className="space-y-2">
+                      <label className="text-sm font-medium text-foreground">{index + 1}. {question.question}</label>
+                      <textarea
+                        value={answers[question._id] || ""}
+                        onChange={(event) => setAnswers({ ...answers, [question._id]: event.target.value })}
+                        placeholder="Optional answer..."
+                        className="w-full bg-card text-foreground placeholder:text-muted-foreground/40 resize-none p-4 rounded-xl border border-border/50 outline-none text-sm focus:border-primary/40 transition-colors min-h-[92px]"
+                      />
                     </div>
                   ))}
                 </div>
-              </div>
-              <div>
-                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Milestones ({roomData.aiScopedBrief.milestones?.length})</div>
-                <div className="space-y-1.5">
-                  {roomData.aiScopedBrief.milestones?.map((m: any, i: number) => (
-                    <div key={i} className="text-xs bg-card rounded-lg px-3 py-2 border border-border/40">
-                      <div className="font-medium text-foreground truncate">{m.title}</div>
-                      <div className="text-muted-foreground">{m.durationWeeks}w</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Risks</div>
-                <div className="space-y-1.5">
-                  {roomData.aiScopedBrief.technicalRisks?.slice(0, 5).map((r: string, i: number) => (
-                    <div key={i} className="text-xs bg-destructive/5 border border-destructive/20 rounded-lg px-3 py-2 text-destructive/80 leading-tight">
-                      ⚠ {r}
-                    </div>
-                  ))}
-                </div>
-              </div>
+              )}
             </div>
 
             <div className="flex items-center gap-3 pt-4 border-t border-border/40">
-              <Button
-                className="flex-1 glow-purple h-12 text-base"
-                onClick={() => navigate(`/room/${roomData._id}`)}
-              >
-                Open Live Room →
+              <Button variant="outline" className="h-12" onClick={() => setPhase("analysis")} disabled={generatingBlueprint}>
+                Back
+              </Button>
+              <Button className="flex-1 glow-purple h-12 text-base" onClick={generateBlueprint} disabled={generatingBlueprint}>
+                {generatingBlueprint ? (
+                  <span className="flex items-center gap-2">
+                    <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                    Generating blueprint...
+                  </span>
+                ) : "Generate phase 2 report"}
               </Button>
             </div>
+          </div>
+        )}
+
+        {phase === "blueprint" && blueprint && (
+          <div className="space-y-7">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Phase 2 output</div>
+                <h1 className="text-3xl font-bold tracking-tight mb-3">Business and development blueprint</h1>
+                <p className="text-muted-foreground max-w-2xl">
+                  This report uses the Phase 1 analysis plus the mandatory and optional Phase 2 answers.
+                </p>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <Button variant="outline" onClick={() => setPhase("technical")} disabled={downloadingBlueprintPdf || creatingRoom || loadingRecommendations}>
+                  Edit answers
+                </Button>
+                <Button variant="outline" onClick={downloadBlueprintPdf} disabled={downloadingBlueprintPdf || creatingRoom || loadingRecommendations}>
+                  {downloadingBlueprintPdf ? "Preparing..." : "Download PDF"}
+                </Button>
+                <Button variant="outline" onClick={enterRoomDashboard} disabled={creatingRoom || loadingRecommendations}>
+                  {creatingRoom ? "Preparing room..." : "Skip matches"}
+                </Button>
+                <Button className="glow-purple" onClick={generateTalentRecommendations} disabled={loadingRecommendations || creatingRoom}>
+                  {loadingRecommendations ? "Finding talent..." : "Generate phase 3 matches"}
+                </Button>
+              </div>
+            </div>
+
+            <BlueprintReport blueprint={blueprint} />
+          </div>
+        )}
+
+        {phase === "recommendations" && talentRecommendationReport && (
+          <div className="space-y-7">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Phase 3 output</div>
+                <h1 className="text-3xl font-bold tracking-tight mb-3">Recommended talent for this budget</h1>
+                <p className="text-muted-foreground max-w-2xl">
+                  Candidates are ranked using verified reputation, previous work, GitHub score, skill fit, availability, and budget fit.
+                </p>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <Button variant="outline" onClick={() => setPhase("blueprint")} disabled={creatingRoom || loadingRecommendations}>
+                  Back to blueprint
+                </Button>
+                <Button variant="outline" onClick={generateTalentRecommendations} disabled={loadingRecommendations || creatingRoom}>
+                  {loadingRecommendations ? "Refreshing..." : "Refresh matches"}
+                </Button>
+                <Button className="glow-purple" onClick={enterRoomDashboard} disabled={creatingRoom || loadingRecommendations}>
+                  {creatingRoom ? "Preparing room..." : "Enter room dashboard"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-xl border border-border/50 bg-card p-4">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Detected MVP budget</div>
+                <div className="text-2xl font-bold font-mono text-primary">{formatCurrency(talentRecommendationReport.budgetUsd)}</div>
+              </div>
+              <div className="rounded-xl border border-border/50 bg-card p-4">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Roles considered</div>
+                <div className="text-2xl font-bold font-mono">{talentRecommendationReport.roleCount}</div>
+              </div>
+              <div className="rounded-xl border border-border/50 bg-card p-4">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Recommended talents</div>
+                <div className="text-2xl font-bold font-mono">{talentRecommendationReport.recommendations.length}</div>
+              </div>
+            </div>
+
+            {talentRecommendationReport.recommendations.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border/50 p-10 text-center">
+                <h2 className="font-semibold mb-2">No verified talent matched yet</h2>
+                <p className="text-sm text-muted-foreground max-w-xl mx-auto">
+                  The room can still be created. Once more verified talent credentials exist, this phase will rank them automatically.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {talentRecommendationReport.recommendations.map((recommendation, index) => (
+                  <div key={`${recommendation.talentId}-${recommendation.matchedRole.roleTitle}-${index}`} className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
+                    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <div className="w-11 h-11 rounded-lg bg-primary/15 border border-primary/25 flex items-center justify-center shrink-0">
+                          <span className="text-primary font-bold">{recommendation.user.name?.[0]?.toUpperCase() ?? "T"}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h2 className="text-lg font-semibold truncate">{recommendation.user.name}</h2>
+                            <span className={`text-[10px] rounded border px-2 py-0.5 ${recommendation.user.isOnline ? "border-emerald-800/40 bg-emerald-950/30 text-emerald-400" : "border-border/50 bg-background/50 text-muted-foreground"}`}>
+                              {recommendation.user.isOnline ? "Available" : "Offline"}
+                            </span>
+                          </div>
+                          <p className="text-sm text-primary mt-1">{recommendation.matchedRole.roleTitle} - {recommendation.credential.skillDomain}</p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            L{recommendation.credential.level} - {recommendation.credential.reputationScore} rep - {recommendation.credential.projectsCompleted} completed projects - GitHub {recommendation.credential.githubScore}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-left md:text-right">
+                        <div className="text-xs text-muted-foreground uppercase tracking-wider">Final score</div>
+                        <div className="text-3xl font-bold font-mono text-primary">{recommendation.finalScore}</div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          ${recommendation.estimatedHourlyRateUsd}/hr - {formatCurrency(recommendation.estimatedProjectCostUsd)} est.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <ScorePill label="Talent score" value={recommendation.scoreBreakdown.talentScore} />
+                      <ScorePill label="Skill match" value={recommendation.scoreBreakdown.skillMatchScore} />
+                      <ScorePill label="Budget fit" value={recommendation.scoreBreakdown.budgetFitScore} />
+                      <ScorePill label="Previous work" value={recommendation.scoreBreakdown.previousWorkScore} />
+                      <ScorePill label="Open source" value={recommendation.scoreBreakdown.openSourceScore} />
+                      <ScorePill label="Availability" value={recommendation.scoreBreakdown.availabilityScore} />
+                    </div>
+
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {recommendation.reasons.slice(0, 6).map((reason, reasonIndex) => (
+                        <div key={reasonIndex} className="rounded-lg border border-border/30 bg-background/35 px-3 py-2 text-xs text-muted-foreground">
+                          {reason}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -1,22 +1,33 @@
 import fs from "node:fs";
-import OpenAI, { toFile } from "openai";
+import { AzureOpenAI, toFile } from "openai";
 import { Buffer } from "node:buffer";
 
-if (!process.env.AI_INTEGRATIONS_OPENAI_BASE_URL) {
+const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+const apiKey = process.env.AZURE_OPENAI_API_KEY;
+const apiVersion = process.env.AZURE_OPENAI_API_VERSION;
+
+if (!endpoint) {
   throw new Error(
-    "AI_INTEGRATIONS_OPENAI_BASE_URL must be set. Did you forget to provision the OpenAI AI integration?",
+    "AZURE_OPENAI_ENDPOINT must be set for Azure OpenAI.",
   );
 }
 
-if (!process.env.AI_INTEGRATIONS_OPENAI_API_KEY) {
+if (!apiKey) {
   throw new Error(
-    "AI_INTEGRATIONS_OPENAI_API_KEY must be set. Did you forget to provision the OpenAI AI integration?",
+    "AZURE_OPENAI_API_KEY must be set for Azure OpenAI.",
   );
 }
 
-export const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+if (!apiVersion) {
+  throw new Error("AZURE_OPENAI_API_VERSION must be set for Azure OpenAI.");
+}
+
+const imageDeployment = process.env.AZURE_OPENAI_IMAGE_DEPLOYMENT ?? process.env.AZURE_OPENAI_DEPLOYMENT;
+
+export const openai = new AzureOpenAI({
+  apiKey,
+  endpoint,
+  apiVersion,
 });
 
 export async function generateImageBuffer(
@@ -24,7 +35,7 @@ export async function generateImageBuffer(
   size: "1024x1024" | "512x512" | "256x256" = "1024x1024"
 ): Promise<Buffer> {
   const response = await openai.images.generate({
-    model: "gpt-image-1",
+    model: imageDeployment ?? "gpt-image-1",
     prompt,
     size,
   });
@@ -46,7 +57,7 @@ export async function editImages(
   );
 
   const response = await openai.images.edit({
-    model: "gpt-image-1",
+    model: imageDeployment ?? "gpt-image-1",
     image: images,
     prompt,
   });

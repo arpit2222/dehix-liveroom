@@ -12,7 +12,7 @@ Full-stack real-time AI-powered Web3 hiring platform. A standard npm monorepo wi
 - Node.js version 24
 - MongoDB (running locally or via Atlas)
 - Firebase (for Live Chat)
-- OpenAI API Key
+- Azure OpenAI resource, API key, API version, and deployed chat model name
 
 ## Setup & Running
 
@@ -24,27 +24,33 @@ Full-stack real-time AI-powered Web3 hiring platform. A standard npm monorepo wi
 2. **Environment Configuration**
    Copy `.env.example` to `artifacts/api-server/.env` and fill in your details:
    - `MONGODB_URI`: Your MongoDB connection string.
-   - `AI_INTEGRATIONS_OPENAI_API_KEY`: Your OpenAI API key.
+   - `AZURE_OPENAI_ENDPOINT`: Your Azure OpenAI endpoint, for example `https://your-resource-name.openai.azure.com`.
+   - `AZURE_OPENAI_API_KEY`: Your Azure OpenAI API key.
+   - `AZURE_OPENAI_API_VERSION`: Azure OpenAI API version used by your resource.
+   - `AZURE_OPENAI_DEPLOYMENT`: The deployment name of your chat model in Azure OpenAI.
    - Firebase credentials (if you want live chat).
 
 3. **Seed Database (Demo Data)**
    Populate MongoDB with demo accounts and dummy rooms:
    ```bash
-   # This requires MONGODB_URI to be exported or present in the .env file!
-   set -o allexport; source artifacts/api-server/.env; set +o allexport
    npm run build
-   npm run seed --workspace=@workspace/api-server
+   npm run seed
    ```
 
 4. **Run Locally**
-   Start the backend server:
+   Start the API and React app together:
    ```bash
-   npm run dev --workspace=@workspace/api-server
+   npm run dev
    ```
-   Start the frontend React app in a new terminal window:
-   ```bash
-   npm run dev --workspace=@workspace/dehix-live-room
-   ```
+
+   By default, the API runs on `http://localhost:5001` and the frontend runs on `http://localhost:5173`.
+   You can also run them separately with `npm run dev:api` and `npm run dev:client`.
+
+## Azure OpenAI Notes
+
+- Azure OpenAI uses deployment names in API calls. Set `AZURE_OPENAI_DEPLOYMENT` to the deployment name you created in Azure, not just the model family name.
+- If you add image, audio, or transcription deployments later, set `AZURE_OPENAI_IMAGE_DEPLOYMENT`, `AZURE_OPENAI_AUDIO_DEPLOYMENT`, or `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT`.
+- If Azure OpenAI variables are missing or the Azure request fails, AI endpoints return an error instead of generated placeholder content.
 
 ## Demo Accounts
 
