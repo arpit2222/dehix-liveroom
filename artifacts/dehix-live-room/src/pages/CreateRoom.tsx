@@ -157,6 +157,11 @@ function getToken() {
 
 async function readApiError(res: Response, fallback: string) {
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    localStorage.removeItem("dehix_token");
+    localStorage.removeItem("dehix_user");
+    window.dispatchEvent(new Event("dehix:auth-cleared"));
+  }
   return data?.error ?? fallback;
 }
 
