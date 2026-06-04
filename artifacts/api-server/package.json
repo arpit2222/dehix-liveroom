@@ -27,6 +27,7 @@
     "openai": "^6.35.0",
     "pino": "^9",
     "pino-http": "^10",
+    "puppeteer": "^24.43.1",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {

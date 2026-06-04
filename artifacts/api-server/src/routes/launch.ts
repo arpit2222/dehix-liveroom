@@ -1,7 +1,7 @@
 import { Router, type Response } from "express";
 import mongoose from "mongoose";
 import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled, missingAzureOpenAiEnvVars } from "../lib/openai.js";
-import { buildSimplePdf } from "../lib/simplePdf.js";
+import { buildBusinessBlueprintPdf, buildBusinessValidationPdf } from "../lib/reportPdf.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { LaunchSession } from "../models/LaunchSession.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
@@ -592,9 +592,8 @@ router.get("/:id/business-validation.pdf", requireAuth, async (req: AuthRequest,
     }
 
     const analysis = session.researchText ? JSON.parse(session.researchText) : {};
-    const pdf = buildSimplePdf(
-      `${session.projectTitle || "Business Idea"} - Business Validation Report`,
-      formatBusinessValidationLines(analysis)
+    const pdf = await buildBusinessValidationPdf(
+      `${session.projectTitle || "Business Idea"} - Business Validation Report`, analysis
     );
 
     res.setHeader("Content-Type", "application/pdf");
@@ -953,9 +952,8 @@ router.get("/:id/business-blueprint.pdf", requireAuth, async (req: AuthRequest, 
     }
 
     const blueprint = JSON.parse(session.technicalDocText);
-    const pdf = buildSimplePdf(
-      `${session.projectTitle || "Business Idea"} - Business Development Blueprint`,
-      formatBusinessBlueprintLines(blueprint)
+    const pdf = await buildBusinessBlueprintPdf(
+      `${session.projectTitle || "Business Idea"} - Business Development Blueprint`, blueprint
     );
 
     res.setHeader("Content-Type", "application/pdf");
