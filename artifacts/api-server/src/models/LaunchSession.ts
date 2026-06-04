@@ -15,6 +15,16 @@ export interface ILaunchSession extends Document {
   researchText?: string;
   businessDocText?: string;
   technicalDocText?: string;
+  businessValidationPdfStatus?: "pending" | "ready" | "failed";
+  businessValidationPdfPath?: string;
+  businessValidationPdfHash?: string;
+  businessValidationPdfError?: string;
+  businessValidationPdfGeneratedAt?: Date;
+  businessBlueprintPdfStatus?: "pending" | "ready" | "failed";
+  businessBlueprintPdfPath?: string;
+  businessBlueprintPdfHash?: string;
+  businessBlueprintPdfError?: string;
+  businessBlueprintPdfGeneratedAt?: Date;
   
   createdAt: Date;
   updatedAt: Date;
@@ -39,6 +49,16 @@ const LaunchSessionSchema = new Schema<ILaunchSession>(
     researchText: { type: String },
     businessDocText: { type: String },
     technicalDocText: { type: String },
+    businessValidationPdfStatus: { type: String, enum: ["pending", "ready", "failed"] },
+    businessValidationPdfPath: { type: String },
+    businessValidationPdfHash: { type: String },
+    businessValidationPdfError: { type: String },
+    businessValidationPdfGeneratedAt: { type: Date },
+    businessBlueprintPdfStatus: { type: String, enum: ["pending", "ready", "failed"] },
+    businessBlueprintPdfPath: { type: String },
+    businessBlueprintPdfHash: { type: String },
+    businessBlueprintPdfError: { type: String },
+    businessBlueprintPdfGeneratedAt: { type: Date },
   },
   { timestamps: true, collection: "dl_launch_sessions" }
 );

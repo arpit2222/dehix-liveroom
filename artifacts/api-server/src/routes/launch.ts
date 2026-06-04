@@ -1,7 +1,12 @@
 import { Router, type Response } from "express";
 import mongoose from "mongoose";
 import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled, missingAzureOpenAiEnvVars } from "../lib/openai.js";
-import { buildBusinessBlueprintPdf, buildBusinessValidationPdf } from "../lib/reportPdf.js";
+import {
+  getOrCreateBusinessBlueprintPdf,
+  getOrCreateBusinessValidationPdf,
+  warmBusinessBlueprintPdf,
+  warmBusinessValidationPdf,
+} from "../lib/reportPdfCache.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { LaunchSession } from "../models/LaunchSession.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
@@ -576,6 +581,7 @@ Return this exact JSON structure:
       summaryText: analysis?.idea_summary,
       researchText: JSON.stringify(analysis),
     });
+    warmBusinessValidationPdf(session);
 
     res.status(201).json({ session, analysis });
   } catch (err) {
@@ -591,10 +597,7 @@ router.get("/:id/business-validation.pdf", requireAuth, async (req: AuthRequest,
       return;
     }
 
-    const analysis = session.researchText ? JSON.parse(session.researchText) : {};
-    const pdf = await buildBusinessValidationPdf(
-      `${session.projectTitle || "Business Idea"} - Business Validation Report`, analysis
-    );
+    const pdf = await getOrCreateBusinessValidationPdf(session);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="business-validation-${session._id}.pdf"`);
@@ -877,6 +880,7 @@ Return this exact JSON structure. Fill every field with concrete, idea-specific 
     session.technicalDocText = JSON.stringify(blueprint);
     session.status = "reviewing";
     await session.save();
+    warmBusinessBlueprintPdf(session);
 
     res.json({ session, blueprint });
   } catch (err) {
@@ -951,10 +955,7 @@ router.get("/:id/business-blueprint.pdf", requireAuth, async (req: AuthRequest, 
       return;
     }
 
-    const blueprint = JSON.parse(session.technicalDocText);
-    const pdf = await buildBusinessBlueprintPdf(
-      `${session.projectTitle || "Business Idea"} - Business Development Blueprint`, blueprint
-    );
+    const pdf = await getOrCreateBusinessBlueprintPdf(session);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="business-blueprint-${session._id}.pdf"`);
