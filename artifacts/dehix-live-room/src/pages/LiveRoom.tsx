@@ -17,6 +17,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { DocModal } from "@/components/DocModal";
 import { toast } from "sonner";
+import { FileCheck2, FileText } from "lucide-react";
 
 type TabKey = "brief" | "tickets" | "milestones" | "nda" | "activity";
 
@@ -178,6 +179,7 @@ export default function LiveRoom() {
   const [notesInput, setNotesInput] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [downloadingRoomPdf, setDownloadingRoomPdf] = useState<"validation" | "blueprint" | null>(null);
   const [chatSummary, setChatSummary] = useState<{ summary: string; keyDecisions: string[]; actionItems: string[] } | null>(null);
   const [activityFeed, setActivityFeed] = useState<{ type: string; label: string; at: string; icon: string }[]>([]);
   const [showActivity, setShowActivity] = useState(false);
@@ -633,6 +635,41 @@ export default function LiveRoom() {
     }
   };
 
+  const readApiError = async (res: Response, fallback: string) => {
+    const data = await res.json().catch(() => null);
+    return data?.error ?? fallback;
+  };
+
+  const downloadRoomReportPdf = async (kind: "validation" | "blueprint") => {
+    if (!roomId || downloadingRoomPdf) return;
+    setDownloadingRoomPdf(kind);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const path = kind === "validation" ? "business-validation.pdf" : "business-blueprint.pdf";
+      const res = await fetch(`/api/rooms/${roomId}/${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, `Failed to download ${kind} PDF`));
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${room?.roomCode ?? "room"}-${kind === "validation" ? "business-validation" : "business-blueprint"}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`${kind === "validation" ? "Validation" : "Blueprint"} PDF downloaded`);
+    } catch (e: any) {
+      toast.error(e.message ?? `Failed to download ${kind} PDF`);
+    } finally {
+      setDownloadingRoomPdf(null);
+    }
+  };
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -732,6 +769,25 @@ export default function LiveRoom() {
               </span>
             )}
             {isBusiness && (
+              <>
+              <button
+                onClick={() => downloadRoomReportPdf("validation")}
+                disabled={downloadingRoomPdf !== null}
+                title="Download business validation PDF"
+                className="text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:hover:text-muted-foreground transition-colors px-2 py-1 rounded border border-border/40 hover:border-border/70 hidden sm:inline-flex items-center gap-1"
+              >
+                <FileCheck2 className="h-3 w-3" />
+                {downloadingRoomPdf === "validation" ? "Preparing..." : "Validation PDF"}
+              </button>
+              <button
+                onClick={() => downloadRoomReportPdf("blueprint")}
+                disabled={downloadingRoomPdf !== null}
+                title="Download business blueprint PDF"
+                className="text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:hover:text-muted-foreground transition-colors px-2 py-1 rounded border border-border/40 hover:border-border/70 hidden sm:inline-flex items-center gap-1"
+              >
+                <FileText className="h-3 w-3" />
+                {downloadingRoomPdf === "blueprint" ? "Preparing..." : "Blueprint PDF"}
+              </button>
               <button
                 onClick={async () => {
                   try {
@@ -754,6 +810,7 @@ export default function LiveRoom() {
               >
                 ↓ Export
               </button>
+              </>
             )}
             {room.meetLink && (
               <a href={room.meetLink} target="_blank" rel="noreferrer">

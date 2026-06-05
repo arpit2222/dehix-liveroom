@@ -860,11 +860,7 @@ Return this exact JSON structure. Fill every field with concrete, idea-specific 
     "build_now_or_not": "Build Now | Validate Further | Not Recommended",
     "reasoning": "string",
     "mvp_confidence_score": "number 0-10"
-  },
-  "next_options": [
-    { "id": "generate_freelancer_requirements", "label": "Generate Freelancer Hiring Requirements" },
-    { "id": "generate_full_documentation", "label": "Generate Full DOC/PDF Documentation" }
-  ]
+  }
 }`;
 
     const completion = await azureOpenai.chat.completions.create({
@@ -1015,6 +1011,7 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
       .join("\n\n");
 
     const businessAnalysis = session.researchText ? JSON.parse(session.researchText) : {};
+    const businessBlueprint = session.technicalDocText ? JSON.parse(session.technicalDocText) : null;
     const talentRecommendationReport = session.businessDocText ? JSON.parse(session.businessDocText) : null;
     const fullDescription = `Original Idea:\n${session.rawIdea}
 
@@ -1085,11 +1082,14 @@ Return this exact JSON structure:
     const room = await LiveRoom.create({
       roomCode,
       businessId: req.userId,
+      launchSessionId: session._id,
       title: brief?.projectTitle || session.projectTitle || "New Project",
       rawDescription: fullDescription,
       aiScopedBrief: {
         ...brief,
+        launchSessionId: String(session._id),
         businessValidation: businessAnalysis,
+        businessBlueprint,
         talentRecommendations: talentRecommendationReport?.recommendations ?? [],
         talentRecommendationBudgetUsd: talentRecommendationReport?.budgetUsd ?? null,
       },

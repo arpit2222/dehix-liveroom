@@ -7,14 +7,42 @@ import { Ticket } from "../models/Ticket.js";
 import { Milestone } from "../models/Milestone.js";
 import { Nda } from "../models/Nda.js";
 import { RoomActivity } from "../models/RoomActivity.js";
+import { LaunchSession } from "../models/LaunchSession.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { CreateRoomBody, InviteTalentBody } from "@workspace/api-zod";
 import { getIo } from "../socket.js";
+import {
+  getOrCreateBusinessBlueprintPdf,
+  getOrCreateBusinessValidationPdf,
+} from "../lib/reportPdfCache.js";
+import { buildBusinessBlueprintPdf, buildBusinessValidationPdf } from "../lib/reportPdf.js";
 
 const router = Router();
 
 function generateMeetLink(roomCode: string): string {
   return `https://meet.google.com/new`;
+}
+
+function originalIdeaFromRoom(room: InstanceType<typeof LiveRoom>): string | undefined {
+  const match = room.rawDescription.match(/^Original Idea:\n([\s\S]*?)(?:\n\nBusiness Validation:|$)/);
+  return match?.[1]?.trim();
+}
+
+async function findLaunchSessionForRoom(room: InstanceType<typeof LiveRoom>) {
+  if (room.launchSessionId) {
+    const session = await LaunchSession.findOne({ _id: room.launchSessionId, userId: room.businessId });
+    if (session) return session;
+  }
+
+  const brief = room.aiScopedBrief as any;
+  if (brief?.launchSessionId) {
+    const session = await LaunchSession.findOne({ _id: brief.launchSessionId, userId: room.businessId });
+    if (session) return session;
+  }
+
+  const rawIdea = originalIdeaFromRoom(room);
+  if (!rawIdea) return null;
+  return LaunchSession.findOne({ userId: room.businessId, rawIdea }).sort({ createdAt: -1 });
 }
 
 router.post("/", requireAuth, async (req: AuthRequest, res) => {
@@ -282,6 +310,59 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+router.get("/:id/business-validation.pdf", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findById(req.params["id"]);
+    if (!room) { res.status(404).json({ error: "Room not found" }); return; }
+    if (String(room.businessId) !== req.userId) {
+      res.status(403).json({ error: "Only the room owner can download the validation PDF" });
+      return;
+    }
+
+    const session = await findLaunchSessionForRoom(room);
+    const pdf = session?.researchText
+      ? await getOrCreateBusinessValidationPdf(session)
+      : await buildBusinessValidationPdf(`${room.title} - Business Validation Report`, (room.aiScopedBrief as any)?.businessValidation);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${room.roomCode}-business-validation.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    req.log.error({ err }, "downloadRoomBusinessValidationPdf error");
+    res.status(500).json({ error: "Failed to download business validation PDF" });
+  }
+});
+
+router.get("/:id/business-blueprint.pdf", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findById(req.params["id"]);
+    if (!room) { res.status(404).json({ error: "Room not found" }); return; }
+    if (String(room.businessId) !== req.userId) {
+      res.status(403).json({ error: "Only the room owner can download the blueprint PDF" });
+      return;
+    }
+
+    const session = await findLaunchSessionForRoom(room);
+    const brief = room.aiScopedBrief as any;
+    let pdf: Buffer;
+    if (session?.technicalDocText) {
+      pdf = await getOrCreateBusinessBlueprintPdf(session);
+    } else if (brief?.businessBlueprint) {
+      pdf = await buildBusinessBlueprintPdf(`${room.title} - Business Development Blueprint`, brief.businessBlueprint);
+    } else {
+      res.status(404).json({ error: "Blueprint report is not available for this room" });
+      return;
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${room.roomCode}-business-blueprint.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    req.log.error({ err }, "downloadRoomBusinessBlueprintPdf error");
+    res.status(500).json({ error: "Failed to download business blueprint PDF" });
+  }
+});
+
 router.get("/:id/export", requireAuth, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
@@ -486,6 +567,7 @@ function formatRoom(room: InstanceType<typeof LiveRoom>) {
   return {
     _id: room._id,
     roomCode: room.roomCode,
+    launchSessionId: room.launchSessionId ?? null,
     title: room.title,
     rawDescription: room.rawDescription,
     aiScopedBrief: room.aiScopedBrief ?? null,
