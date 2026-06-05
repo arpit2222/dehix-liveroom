@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -88,6 +88,15 @@ type TalentRecommendationReport = {
   budgetUsd?: number | null;
   roleCount: number;
   recommendations: TalentRecommendation[];
+};
+
+type ChatMessage = {
+  id: string;
+  userId?: string;
+  userName: string;
+  message: string;
+  isAi: boolean;
+  createdAt?: string | Date;
 };
 
 const EXAMPLE_PROMPTS = [
@@ -307,6 +316,102 @@ export default function CreateRoom() {
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [downloadingBlueprintPdf, setDownloadingBlueprintPdf] = useState(false);
   const [talentRecommendationReport, setTalentRecommendationReport] = useState<TalentRecommendationReport | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollChatToBottom = () => {
+    setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+  };
+
+  const loadLaunchChatHistory = async (launchSessionId: string) => {
+    try {
+      const res = await fetch(`/api/ai/chat-history?launchSessionId=${encodeURIComponent(launchSessionId)}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setChatMessages(Array.isArray(data.messages) ? data.messages : []);
+      scrollChatToBottom();
+    } catch {
+      // Chat history is helpful, but the launch flow should not fail if it cannot load.
+    }
+  };
+
+  useEffect(() => {
+    if (sessionData?._id) {
+      loadLaunchChatHistory(sessionData._id);
+    }
+  }, [sessionData?._id]);
+
+  const askLaunchAi = async () => {
+    const message = chatInput.trim();
+    if (!message || aiLoading) return;
+    if (!sessionData?._id) {
+      toast.info("Analyze the business idea first, then the AI can use the saved Phase 1 context.");
+      return;
+    }
+
+    setChatInput("");
+    setAiLoading(true);
+    const userMessage: ChatMessage = {
+      id: `local-${Date.now()}`,
+      userId: user?._id,
+      userName: user?.name ?? "You",
+      message,
+      isAi: false,
+      createdAt: new Date(),
+    };
+    setChatMessages((prev) => [...prev, userMessage]);
+    scrollChatToBottom();
+
+    try {
+      const clientContext = [
+        `Current frontend phase: ${phase}`,
+        `Current idea input:\n${description || "Not available"}`,
+        `Mandatory Phase 2 questions and currently typed answers:\n${mandatoryQuestions.map((question, index) => {
+          const answer = answers[question._id]?.trim();
+          return `${index + 1}. ${question.question}\nAnswer: ${answer || "Not answered yet"}`;
+        }).join("\n\n") || "Mandatory questions not loaded yet."}`,
+        `Optional AI questions and currently typed answers:\n${optionalQuestions.map((question, index) => {
+          const answer = answers[question._id]?.trim();
+          return `${index + 1}. ${question.question}\nAnswer: ${answer || "Not answered yet"}`;
+        }).join("\n\n") || "Optional questions not loaded yet."}`,
+      ].join("\n\n");
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${getToken()}`,
+        },
+        body: JSON.stringify({ message, launchSessionId: sessionData._id, clientContext }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Azure OpenAI request failed");
+      const aiMessage: ChatMessage = data.message ?? {
+        id: `ai-${Date.now()}`,
+        userName: "DEHIX AI",
+        message: data.reply ?? "I couldn't process that.",
+        isAi: true,
+        createdAt: new Date(),
+      };
+      setChatMessages((prev) => [...prev, aiMessage]);
+      scrollChatToBottom();
+    } catch (err: any) {
+      const aiMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        userName: "DEHIX AI",
+        message: err?.message ?? "Azure OpenAI request failed",
+        isAi: true,
+        createdAt: new Date(),
+      };
+      setChatMessages((prev) => [...prev, aiMessage]);
+      scrollChatToBottom();
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   if (!isAuthenticated || user?.role !== "business") {
     return (
@@ -576,7 +681,8 @@ export default function CreateRoom() {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-6 py-10">
+      <div className={`${phase === "idea" ? "max-w-5xl" : "max-w-[1400px] grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]"} mx-auto px-6 py-10`}>
+        <main className="min-w-0">
         <div className="mb-8 grid gap-2 text-xs sm:grid-cols-4">
           {[
             ["idea", "1", "Idea input"],
@@ -941,6 +1047,84 @@ export default function CreateRoom() {
               </div>
             )}
           </div>
+        )}
+        </main>
+
+        {phase !== "idea" && (
+        <aside className="lg:sticky lg:top-20 h-[min(720px,calc(100vh-6rem))] rounded-xl border border-border/50 bg-card/80 flex flex-col overflow-hidden">
+          <div className="shrink-0 border-b border-border/40 px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold">DEHIX AI</h2>
+                <p className="text-[10px] text-muted-foreground">
+                  {sessionData?._id ? "Uses Phase 1, blueprint, answers, and this chat." : "Available after Phase 1 analysis."}
+                </p>
+              </div>
+              <span className="text-[9px] rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-primary">Live context</span>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {chatMessages.length === 0 && (
+              <div className="text-center py-8 px-3">
+                <p className="text-xs text-muted-foreground/60">
+                  Ask about validation, risks, MVP scope, budget, or what to answer next.
+                </p>
+              </div>
+            )}
+
+            {chatMessages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`rounded-lg border p-2 text-xs ${
+                  msg.isAi
+                    ? "border-primary/20 bg-primary/5"
+                    : "border-border/35 bg-background/50"
+                }`}
+              >
+                <div className="mb-1 flex items-center gap-1.5">
+                  {msg.isAi && <span className="rounded border border-primary/30 bg-primary/15 px-1 text-[9px] font-semibold text-primary">AI</span>}
+                  <span className={`text-[11px] font-medium ${msg.isAi ? "text-primary" : "text-foreground/80"}`}>{msg.userName}</span>
+                </div>
+                <p className="whitespace-pre-wrap leading-relaxed text-foreground/85">{msg.message}</p>
+              </div>
+            ))}
+
+            {aiLoading && (
+              <div className="rounded-lg border border-primary/20 bg-primary/5 p-2 text-xs">
+                <div className="mb-1 flex items-center gap-1.5">
+                  <span className="rounded border border-primary/30 bg-primary/15 px-1 text-[9px] font-semibold text-primary">AI</span>
+                  <span className="text-[11px] font-medium text-primary">DEHIX AI</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary/50" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary/50" style={{ animationDelay: "150ms" }} />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary/50" style={{ animationDelay: "300ms" }} />
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          <div className="shrink-0 border-t border-border/40 p-3">
+            <textarea
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  askLaunchAi();
+                }
+              }}
+              placeholder={sessionData?._id ? "Ask AI about this launch..." : "Analyze the idea first..."}
+              className="mb-2 min-h-[74px] w-full resize-none rounded-lg border border-border/50 bg-background/60 p-2 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
+              disabled={!sessionData?._id || aiLoading}
+            />
+            <Button className="h-8 w-full text-xs glow-purple" onClick={askLaunchAi} disabled={!sessionData?._id || !chatInput.trim() || aiLoading}>
+              {aiLoading ? "Thinking..." : "Ask AI"}
+            </Button>
+          </div>
+        </aside>
         )}
       </div>
     </div>

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useLocation } from "wouter";
 import { io, type Socket } from "socket.io-client";
 import {
-  collection, addDoc, onSnapshot, orderBy, query as fsQuery, serverTimestamp
+  collection, addDoc, serverTimestamp
 } from "firebase/firestore";
 import { db, isFirebaseEnabled } from "@/lib/firebase";
 import {
@@ -235,28 +235,35 @@ export default function LiveRoom() {
   const assembleSquad = useAssembleSquad({
     mutation: { onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }) },
   });
-  const callAiChat = async (message: string, history: ChatMessage[]) => {
+  const loadAiChatHistory = async () => {
+    if (!roomId) return;
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const res = await fetch(`/api/ai/chat-history?roomId=${encodeURIComponent(roomId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setChatMessages(Array.isArray(data.messages) ? data.messages : []);
+      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    } catch {
+      // The room should still render even if AI chat history cannot load.
+    }
+  };
+
+  const callAiChat = async (message: string) => {
     setAiLoading(true);
     try {
       const token = localStorage.getItem("dehix_token");
-      const historyPayload = history.slice(-15).map((m) => ({
-        role: m.isAi ? "assistant" : "user",
-        content: m.isAi ? m.message : `${m.userName}: ${m.message}`,
-      }));
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ message, roomId, history: historyPayload }),
+        body: JSON.stringify({ message, roomId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Azure OpenAI request failed");
-      const reply = data.reply ?? "I couldn't process that.";
-      const aiMsg = { userId: "ai", userName: "DEHIX AI", message: reply, isAi: true };
-      if (isFirebaseEnabled && db) {
-        await addDoc(collection(db, `liverooms/${roomId}/messages`), { ...aiMsg, createdAt: serverTimestamp() });
-      } else {
-        addLocalMessage(aiMsg);
-      }
+      const aiMsg = data.message ?? { userId: "ai", userName: "DEHIX AI", message: data.reply ?? "I couldn't process that.", isAi: true };
+      addLocalMessage(aiMsg);
     } catch (e: any) {
       addLocalMessage({ userId: "ai", userName: "DEHIX AI", message: e.message ?? "Azure OpenAI request failed", isAi: true });
     } finally {
@@ -315,17 +322,7 @@ export default function LiveRoom() {
   }, [roomId, user]);
 
   useEffect(() => {
-    if (!roomId || !isFirebaseEnabled || !db) return;
-    const q = fsQuery(
-      collection(db, `liverooms/${roomId}/messages`),
-      orderBy("createdAt", "asc")
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const msgs = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() } as ChatMessage));
-      setChatMessages(msgs);
-      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-    });
-    return () => unsub();
+    loadAiChatHistory();
   }, [roomId]);
 
   const sendChat = async () => {
@@ -333,13 +330,12 @@ export default function LiveRoom() {
     const msg = chatInput.trim();
     setChatInput("");
     const msgData = { userId: user._id, userName: user.name, message: msg, isAi: false };
+    addLocalMessage(msgData);
     if (isFirebaseEnabled && db) {
       await addDoc(collection(db, `liverooms/${roomId}/messages`), {
         ...msgData,
         createdAt: serverTimestamp(),
       });
-    } else {
-      addLocalMessage(msgData);
     }
   };
 
@@ -348,12 +344,11 @@ export default function LiveRoom() {
     const msg = chatInput.trim();
     setChatInput("");
     const msgData = { userId: user._id, userName: user.name, message: msg, isAi: false };
+    addLocalMessage(msgData);
     if (isFirebaseEnabled && db) {
       await addDoc(collection(db, `liverooms/${roomId}/messages`), { ...msgData, createdAt: serverTimestamp() });
-    } else {
-      addLocalMessage(msgData);
     }
-    await callAiChat(msg, chatMessages);
+    await callAiChat(msg);
   };
 
   const loadActivity = async () => {

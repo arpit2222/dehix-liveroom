@@ -7,6 +7,7 @@ import {
   warmBusinessBlueprintPdf,
   warmBusinessValidationPdf,
 } from "../lib/reportPdfCache.js";
+import { TECH_MANDATORY_QUESTIONS, getMandatoryQuestion } from "../lib/launchQuestions.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { LaunchSession } from "../models/LaunchSession.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
@@ -15,34 +16,6 @@ import { SbtCredential } from "../models/SbtCredential.js";
 import { CreateLaunchSessionBody, ScopeLaunchSessionBody } from "@workspace/api-zod";
 
 const router = Router();
-
-const TECH_MANDATORY_QUESTIONS = [
-  {
-    _id: "primary_user_goal",
-    question: "Who will use this product first, and what is the main thing they should be able to do on day one?",
-    required: true,
-  },
-  {
-    _id: "first_platform",
-    question: "Where should the first version launch: web app, mobile app, admin dashboard, API, or something else?",
-    required: true,
-  },
-  {
-    _id: "must_have_features",
-    question: "What are the top 3 must-have features for the first usable version?",
-    required: true,
-  },
-  {
-    _id: "accounts_payments_data",
-    question: "Will the product need user accounts, payments, file uploads, chat, maps, AI, blockchain, or third-party integrations?",
-    required: true,
-  },
-  {
-    _id: "constraints",
-    question: "Do you have any fixed timeline, budget range, compliance needs, or existing tools/data that the team must work with?",
-    required: true,
-  },
-];
 
 function requireAzureOpenAi(res: Response): boolean {
   if (isAzureOpenAiEnabled) {
@@ -71,10 +44,6 @@ function parseAzureJson<T>(content: string): T {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : [];
-}
-
-function getMandatoryQuestion(questionId: string) {
-  return TECH_MANDATORY_QUESTIONS.find((question) => question._id === questionId);
 }
 
 function formatBusinessValidationLines(analysis: any): Array<{ text: string; size?: number; gapAfter?: number }> {
@@ -874,6 +843,7 @@ Return this exact JSON structure. Fill every field with concrete, idea-specific 
 
     const blueprint = parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}");
     session.technicalDocText = JSON.stringify(blueprint);
+    session.technicalAnswersText = technicalAnswersText;
     session.status = "reviewing";
     await session.save();
     warmBusinessBlueprintPdf(session);
@@ -1009,6 +979,7 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
       })
       .filter(Boolean)
       .join("\n\n");
+    session.technicalAnswersText = technicalAnswersText;
 
     const businessAnalysis = session.researchText ? JSON.parse(session.researchText) : {};
     const businessBlueprint = session.technicalDocText ? JSON.parse(session.technicalDocText) : null;

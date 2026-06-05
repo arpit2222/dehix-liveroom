@@ -10,6 +10,10 @@ import { Nda } from "../models/Nda.js";
 import { User } from "../models/User.js";
 import { SbtCredential } from "../models/SbtCredential.js";
 import { RoomActivity } from "../models/RoomActivity.js";
+import { LaunchSession } from "../models/LaunchSession.js";
+import { LaunchClarification } from "../models/LaunchClarification.js";
+import { AiChatMessage } from "../models/AiChatMessage.js";
+import { TECH_MANDATORY_QUESTIONS } from "../lib/launchQuestions.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { ScopeProjectBody, MatchTalentBody, GenerateNdaBody, SuggestMilestonesBody, AiChatBody } from "@workspace/api-zod";
 
@@ -19,6 +23,12 @@ type ConvMsg = {
   userName: string;
   message: string;
   isAi: boolean;
+};
+
+type ChatThreadContext = {
+  threadId: string;
+  launchSession: InstanceType<typeof LaunchSession> | null;
+  room: InstanceType<typeof LiveRoom> | null;
 };
 
 function requireAzureOpenAi(res: Response): boolean {
@@ -36,6 +46,154 @@ function requireAzureOpenAi(res: Response): boolean {
 function sendAzureOpenAiError(req: AuthRequest, res: Response, err: unknown, message: string) {
   req.log.error({ err }, message);
   res.status(502).json({ error: message });
+}
+
+function safeJson(value: unknown, maxLength = 6000): string {
+  if (value === null || value === undefined) return "Not available";
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}\n...[trimmed for AI context]`;
+}
+
+async function resolveChatThread(req: AuthRequest, res: Response): Promise<ChatThreadContext | null> {
+  const roomId = typeof req.body.roomId === "string" ? req.body.roomId : typeof req.query.roomId === "string" ? req.query.roomId : "";
+  const launchSessionId =
+    typeof req.body.launchSessionId === "string"
+      ? req.body.launchSessionId
+      : typeof req.query.launchSessionId === "string"
+        ? req.query.launchSessionId
+        : "";
+
+  if (roomId) {
+    const room = await LiveRoom.findById(roomId);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return null;
+    }
+
+    const isOwner = String(room.businessId) === req.userId;
+    const isParticipant = await RoomParticipant.exists({ roomId: room._id, userId: req.userId });
+    if (!isOwner && !isParticipant) {
+      res.status(403).json({ error: "You do not have access to this room chat" });
+      return null;
+    }
+
+    let launchSession: InstanceType<typeof LaunchSession> | null = null;
+    if (room.launchSessionId) {
+      launchSession = await LaunchSession.findOne({ _id: room.launchSessionId, userId: room.businessId });
+    } else {
+      const brief = room.aiScopedBrief as any;
+      if (brief?.launchSessionId) {
+        launchSession = await LaunchSession.findOne({ _id: brief.launchSessionId, userId: room.businessId });
+      }
+    }
+
+    return {
+      threadId: launchSession ? `launch:${String(launchSession._id)}` : `room:${String(room._id)}`,
+      launchSession,
+      room,
+    };
+  }
+
+  if (launchSessionId) {
+    const launchSession = await LaunchSession.findOne({ _id: launchSessionId, userId: req.userId });
+    if (!launchSession) {
+      res.status(404).json({ error: "Launch session not found" });
+      return null;
+    }
+    return {
+      threadId: `launch:${String(launchSession._id)}`,
+      launchSession,
+      room: null,
+    };
+  }
+
+  res.status(400).json({ error: "roomId or launchSessionId is required" });
+  return null;
+}
+
+async function buildLaunchContext(session: InstanceType<typeof LaunchSession> | null): Promise<string> {
+  if (!session) return "No launch session context available.";
+
+  const clarifications = await LaunchClarification.find({ sessionId: session._id }).sort({ orderIndex: 1 });
+  const technicalAnswersText = session.technicalAnswersText ?? "";
+  const mandatoryQuestionContext = TECH_MANDATORY_QUESTIONS
+    .map((question, index) => {
+      const answered = technicalAnswersText.includes(`Q: ${question.question}\nA:`);
+      return `${index + 1}. ${question.question}\nRequired: yes\nAnswer status: ${answered ? "answered in saved technical Q&A below" : "not answered yet or not saved yet"}`;
+    })
+    .join("\n\n");
+  const qa = clarifications
+    .map((item) => `Q: ${item.question}\nA: ${item.answer ?? "Not answered"}`)
+    .join("\n\n");
+
+  return [
+    `Launch session id: ${String(session._id)}`,
+    `Original user idea:\n${session.rawIdea}`,
+    `Project title: ${session.projectTitle ?? "Not available"}`,
+    `Phase 1 business validation JSON:\n${safeJson(session.researchText, 9000)}`,
+    `Phase 2 business/development blueprint JSON:\n${safeJson(session.technicalDocText, 9000)}`,
+    `Phase 2 mandatory questions:\n${mandatoryQuestionContext}`,
+    `Mandatory and optional technical Q&A submitted by the user:\n${session.technicalAnswersText || "No mandatory/optional technical answers saved yet."}`,
+    `Talent recommendation report JSON:\n${safeJson(session.businessDocText, 5000)}`,
+    `Dynamic optional question records:\n${qa || "No optional question records saved yet."}`,
+  ].join("\n\n");
+}
+
+async function buildRoomContext(room: InstanceType<typeof LiveRoom> | null): Promise<string> {
+  if (!room) return "No live room context available yet.";
+
+  const [roles, participants, tickets, milestones, nda] = await Promise.all([
+    RoomRole.find({ roomId: room._id }),
+    RoomParticipant.find({ roomId: room._id }).populate("userId", "name email role"),
+    Ticket.find({ roomId: room._id }),
+    Milestone.find({ roomId: room._id }),
+    Nda.findOne({ roomId: room._id }),
+  ]);
+
+  return [
+    `Room id: ${String(room._id)}`,
+    `Room title: ${room.title}`,
+    `Room code: ${room.roomCode}`,
+    `Room status: ${room.status}`,
+    `Raw room description:\n${room.rawDescription}`,
+    `Room notes:\n${room.notes ?? "No notes yet."}`,
+    `AI scoped brief JSON:\n${safeJson(room.aiScopedBrief, 10000)}`,
+    `Roles:\n${safeJson(roles.map((role) => ({
+      title: role.roleTitle,
+      skillDomain: role.skillDomain,
+      requiredLevel: role.requiredLevel,
+      minReputation: role.minReputation,
+      status: role.status,
+    })), 5000)}`,
+    `Tickets:\n${safeJson(tickets.map((ticket) => ({
+      title: ticket.title,
+      description: ticket.description,
+      status: ticket.status,
+      milestoneNumber: ticket.milestoneNumber,
+      estimatedHours: ticket.estimatedHours,
+    })), 7000)}`,
+    `Milestones:\n${safeJson(milestones.map((milestone) => ({
+      title: milestone.title,
+      description: milestone.description,
+      status: milestone.status,
+      amountUsd: milestone.amountUsd,
+      dueDate: milestone.dueDate,
+    })), 7000)}`,
+    `Participants:\n${safeJson(participants.map((participant: any) => ({
+      name: participant.userId?.name,
+      email: participant.userId?.email,
+      role: participant.userId?.role,
+      status: participant.status,
+    })), 4000)}`,
+    `NDA:\n${safeJson(nda ? { status: nda.status, signedBy: nda.signedBy, content: nda.content } : null, 5000)}`,
+  ].join("\n\n");
+}
+
+function formatStoredConversation(messages: Array<{ role: string; userName: string; message: string }>, maxLength = 12000) {
+  const fullText = messages.map((msg) => `${msg.role === "assistant" ? "DEHIX AI" : msg.userName}: ${msg.message}`).join("\n\n");
+  if (fullText.length <= maxLength) return fullText || "No previous conversation yet.";
+  return `${fullText.slice(-maxLength)}\n\n[Earlier conversation exists in database but was trimmed from this request because of model context limits.]`;
 }
 
 router.post("/scope", requireAuth, async (req: AuthRequest, res) => {
@@ -277,7 +435,129 @@ Return array of: [{ "title": string, "description": string, "amountUsd": number,
   }
 });
 
+router.get("/chat-history", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const context = await resolveChatThread(req, res);
+    if (!context) return;
+
+    const messages = await AiChatMessage.find({ threadId: context.threadId }).sort({ createdAt: 1 });
+    res.json({
+      threadId: context.threadId,
+      messages: messages.map((msg) => ({
+        _id: msg._id,
+        id: String(msg._id),
+        userId: msg.userId,
+        userName: msg.userName,
+        role: msg.role,
+        message: msg.message,
+        isAi: msg.isAi,
+        createdAt: msg.createdAt,
+      })),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to load AI chat history");
+    res.status(500).json({ error: "Failed to load AI chat history" });
+  }
+});
+
 router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
+  const message = typeof req.body.message === "string" ? req.body.message.trim() : "";
+  if (!message) {
+    res.status(400).json({ error: "message is required" });
+    return;
+  }
+
+  if (!requireAzureOpenAi(res)) {
+    return;
+  }
+
+  try {
+    const context = await resolveChatThread(req, res);
+    if (!context) return;
+
+    const user = await User.findById(req.userId);
+    const userName = user?.name ?? "User";
+
+    await AiChatMessage.create({
+      threadId: context.threadId,
+      launchSessionId: context.launchSession?._id,
+      roomId: context.room?._id,
+      userId: req.userId,
+      userName,
+      role: "user",
+      message,
+      isAi: false,
+    });
+
+    const storedMessages = await AiChatMessage.find({ threadId: context.threadId }).sort({ createdAt: 1 });
+    const launchContext = await buildLaunchContext(context.launchSession);
+    const roomContext = await buildRoomContext(context.room);
+    const savedConversation = formatStoredConversation(storedMessages);
+    const clientContext = typeof req.body.clientContext === "string" ? req.body.clientContext.slice(0, 8000) : "No live frontend form context provided.";
+
+    const systemPrompt = `You are the DEHIX Live Room AI, a context-aware project copilot for the full DEHIX launch-to-room workflow.
+
+Your job:
+- Understand the user's business idea, validation, blueprint, room dashboard, roles, milestones, tickets, NDA, notes, and chat history.
+- Answer using the saved project context first. Do not guess when the answer exists in the context.
+- If context is missing or stale, clearly say what is missing.
+- Help the user make product, business, technical, hiring, milestone, and execution decisions.
+- Keep continuity from the beginning of Phase 1 through the room dashboard.
+- Be practical, specific, and concise unless the user asks for depth.
+
+Launch context:
+${launchContext}
+
+Live room context:
+${roomContext}
+
+Live frontend form context:
+${clientContext}
+
+Saved conversation from this thread:
+${savedConversation}`;
+
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message },
+      ],
+      max_completion_tokens: 1400,
+    });
+
+    const reply = completion.choices[0]?.message?.content ?? "I couldn't process that request.";
+    const savedReply = await AiChatMessage.create({
+      threadId: context.threadId,
+      launchSessionId: context.launchSession?._id,
+      roomId: context.room?._id,
+      userId: req.userId,
+      userName: "DEHIX AI",
+      role: "assistant",
+      message: reply,
+      isAi: true,
+    });
+
+    res.json({
+      threadId: context.threadId,
+      reply,
+      message: {
+        _id: savedReply._id,
+        id: String(savedReply._id),
+        userId: savedReply.userId,
+        userName: savedReply.userName,
+        role: savedReply.role,
+        message: savedReply.message,
+        isAi: savedReply.isAi,
+        createdAt: savedReply.createdAt,
+      },
+    });
+  } catch (err) {
+    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate chat reply");
+  }
+});
+
+router.post("/chat-legacy", requireAuth, async (req: AuthRequest, res) => {
   const parsed = AiChatBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input" });
