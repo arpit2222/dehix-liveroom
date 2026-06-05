@@ -114,8 +114,8 @@ export default function TalentProfile() {
                   </div>
                 )}
                 <div className="flex items-center gap-2 mt-2 flex-wrap">
-                  <span className={`inline-flex items-center gap-1 text-xs font-medium ${user.isOnline ? "text-emerald-400" : "text-muted-foreground"}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${user.isOnline ? "bg-emerald-400" : "bg-gray-600"}`} />
+                  <span className={`inline-flex items-center gap-1 text-xs font-medium ${user.isOnline ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${user.isOnline ? "bg-green-400" : "bg-gray-600"}`} />
                     {user.isOnline ? "Available for hire" : "Not available"}
                   </span>
                   <span className="text-muted-foreground/30">·</span>
@@ -214,7 +214,7 @@ export default function TalentProfile() {
             </div>
             {credList.some((c: any) => c.githubScore > 0) && (
               <div className="text-center">
-                <div className="text-2xl font-bold font-mono text-violet-400">
+                <div className="text-2xl font-bold font-mono text-blue-600 dark:text-blue-400">
                   {Math.max(...credList.map((c: any) => c.githubScore ?? 0))}
                 </div>
                 <div className="text-xs text-muted-foreground">GitHub score</div>
@@ -222,7 +222,7 @@ export default function TalentProfile() {
             )}
             {credList.some((c: any) => c.interviewScore > 0) && (
               <div className="text-center">
-                <div className="text-2xl font-bold font-mono text-amber-400">
+                <div className="text-2xl font-bold font-mono text-amber-600 dark:text-amber-400">
                   {Math.max(...credList.map((c: any) => c.interviewScore ?? 0))}
                 </div>
                 <div className="text-xs text-muted-foreground">Interview score</div>

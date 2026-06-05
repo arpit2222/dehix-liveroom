@@ -4,15 +4,15 @@ interface Props {
 }
 
 const STATUS_CONFIG = {
-  verified: { label: "Verified", className: "bg-emerald-950/60 text-emerald-400 border-emerald-800/50" },
-  disputed: { label: "Disputed", className: "bg-amber-950/60 text-amber-400 border-amber-800/50" },
-  revoked: { label: "Revoked", className: "bg-red-950/60 text-red-400 border-red-800/50" },
+  verified: { label: "Verified", className: "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20" },
+  disputed: { label: "Disputed", className: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20" },
+  revoked: { label: "Revoked", className: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20" },
 };
 
 export function StatusBadge({ status, className = "" }: Props) {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.verified;
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border ${cfg.className} ${className}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cfg.className} ${className}`}>
       <span className="w-1.5 h-1.5 rounded-full bg-current" />
       {cfg.label}
     </span>

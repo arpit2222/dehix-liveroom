@@ -78,7 +78,7 @@ export default function Login() {
                   <div className="text-xs font-semibold text-foreground group-hover:text-primary transition-colors truncate">
                     {loadingDemo === acc.label ? "Signing in..." : acc.label}
                   </div>
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded border font-medium shrink-0 ${acc.role === "business" ? "text-amber-400 border-amber-800/40 bg-amber-950/30" : "text-emerald-400 border-emerald-800/40 bg-emerald-950/30"}`}>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded border font-medium shrink-0 ${acc.role === "business" ? "text-amber-600 dark:text-amber-400 border-amber-500/20 bg-amber-500/10" : "text-green-600 dark:text-green-400 border-green-500/20 bg-green-500/10"}`}>
                     {acc.role}
                   </span>
                 </div>

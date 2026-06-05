@@ -13,11 +13,11 @@ export function ReputationRing({ score, size = 60, strokeWidth = 5, className = 
 
   const color =
     score >= 800
-      ? "#a78bfa"
+      ? "#16a34a"
       : score >= 500
-      ? "#818cf8"
+      ? "#2563eb"
       : score >= 200
-      ? "#6366f1"
+      ? "#d97706"
       : "#4b5563";
 
   return (
@@ -28,7 +28,7 @@ export function ReputationRing({ score, size = 60, strokeWidth = 5, className = 
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="hsl(262 25% 16%)"
+          stroke="hsl(var(--muted))"
           strokeWidth={strokeWidth}
         />
         <circle

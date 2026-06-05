@@ -120,12 +120,12 @@ const TICKET_COLUMNS = [
 ];
 
 const STATUS_COLORS: Record<string, string> = {
-  scoping: "text-blue-400 bg-blue-950/40 border-blue-800/40",
-  matching: "text-amber-400 bg-amber-950/40 border-amber-800/40",
-  open: "text-emerald-400 bg-emerald-950/40 border-emerald-800/40",
-  assembling: "text-violet-400 bg-violet-950/40 border-violet-800/40",
-  contracted: "text-cyan-400 bg-cyan-950/40 border-cyan-800/40",
-  closed: "text-gray-400 bg-gray-950/40 border-gray-700/40",
+  scoping: "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20",
+  matching: "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20",
+  open: "text-green-600 dark:text-green-400 bg-green-500/10 border-green-500/20",
+  assembling: "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20",
+  contracted: "text-green-600 dark:text-green-400 bg-green-500/10 border-green-500/20",
+  closed: "text-muted-foreground bg-muted border-border",
 };
 
 interface ChatMessage {
@@ -749,17 +749,17 @@ export default function LiveRoom() {
               title="Copy room code"
               className="text-xs font-mono text-muted-foreground shrink-0 hidden sm:inline hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-muted/30"
             >
-              {copiedCode ? <span className="text-emerald-400">✓ Copied!</span> : room.roomCode}
+              {copiedCode ? <span className="text-green-600 dark:text-green-400">✓ Copied!</span> : room.roomCode}
             </button>
             {room.contractedAt && (
-              <span className="text-[10px] text-cyan-400/70 hidden md:inline">
+              <span className="text-[10px] text-blue-600/80 dark:text-blue-400/70 hidden md:inline">
                 Contracted {new Date(room.contractedAt).toLocaleDateString()}
               </span>
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {!isFirebaseEnabled && (
-              <span className="text-[10px] text-amber-400 border border-amber-800/40 bg-amber-950/30 rounded px-2 py-0.5 hidden sm:inline">
+              <span className="text-[10px] text-amber-600 dark:text-amber-400 border border-amber-500/20 bg-amber-500/10 rounded px-2 py-0.5 hidden sm:inline">
                 Demo chat
               </span>
             )}
@@ -834,9 +834,9 @@ export default function LiveRoom() {
                       <div className="flex items-start justify-between gap-1 mb-0.5">
                         <span className="text-xs font-medium text-foreground leading-tight line-clamp-2">{role.roleTitle}</span>
                         <span className={`shrink-0 text-[9px] px-1 py-0.5 rounded border capitalize ml-1 ${
-                          role.status === "filled" ? "text-emerald-400 bg-emerald-950/40 border-emerald-800/40" :
-                          role.status === "accepted" ? "text-cyan-400 bg-cyan-950/40 border-cyan-800/40" :
-                          "text-amber-400 bg-amber-950/40 border-amber-800/40"
+                          role.status === "filled" ? "text-green-600 dark:text-green-400 bg-green-500/10 border-green-500/20" :
+                          role.status === "accepted" ? "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20" :
+                          "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20"
                         }`}>
                           {role.status}
                         </span>
@@ -878,7 +878,7 @@ export default function LiveRoom() {
                             <div className="min-w-0">
                               <div className="text-xs font-medium truncate">{u?.name ?? "User"}</div>
                               <div className="flex items-center gap-1 flex-wrap">
-                                <span className={`text-[10px] ${p.status === "joined" ? "text-emerald-400" : "text-muted-foreground"}`}>
+                                <span className={`text-[10px] ${p.status === "joined" ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
                                   {p.status}
                                 </span>
                                 {matchedRole && (
@@ -981,7 +981,7 @@ export default function LiveRoom() {
                   <span className="ml-1.5 text-[10px] text-muted-foreground">{milestones.length}</span>
                 )}
                 {t === "nda" && nda && (
-                  <span className={`ml-1.5 w-1.5 h-1.5 rounded-full inline-block ${nda.status === "signed" ? "bg-emerald-400" : "bg-amber-400"}`} />
+                  <span className={`ml-1.5 w-1.5 h-1.5 rounded-full inline-block ${nda.status === "signed" ? "bg-green-400" : "bg-amber-400"}`} />
                 )}
               </button>
             ))}
@@ -1011,7 +1011,7 @@ export default function LiveRoom() {
                 <>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className="text-[10px] text-muted-foreground">Escrow</span>
-                    <span className="text-[10px] font-mono text-emerald-400/80">
+                    <span className="text-[10px] font-mono text-green-600/80 dark:text-green-400/80">
                       ${milestones.filter((m: any) => m.status === "released").reduce((s: number, m: any) => s + (m.amountUsd ?? 0), 0).toLocaleString()}
                     </span>
                     <span className="text-[10px] text-muted-foreground/50">/</span>
@@ -1291,8 +1291,8 @@ export default function LiveRoom() {
                               {t.priority && t.priority !== "medium" && (
                                 <span className={`text-[10px] capitalize ${
                                   t.priority === "critical" ? "text-red-400" :
-                                  t.priority === "high" ? "text-amber-400" :
-                                  "text-blue-400"
+                                  t.priority === "high" ? "text-amber-600 dark:text-amber-400" :
+                                  "text-blue-600 dark:text-blue-400"
                                 }`}>{t.priority}</span>
                               )}
                               </div>
@@ -1378,17 +1378,17 @@ export default function LiveRoom() {
                   <div className="space-y-3">
                     {milestones.map((m: any, i: number) => (
                       <div key={m._id} className={`rounded-xl border bg-card p-4 transition-colors ${
-                        m.status === "released" ? "border-emerald-800/40 bg-emerald-950/10" : "border-border/40"
+                        m.status === "released" ? "border-green-500/20 bg-green-500/10" : "border-border/40"
                       }`}>
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex items-start gap-3">
                             <div className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 mt-0.5 ${
                               m.status === "released"
-                                ? "border-emerald-500/50 bg-emerald-950/40"
+                                ? "border-green-500/50 bg-green-500/10"
                                 : "border-primary/40 bg-primary/10"
                             }`}>
                               {m.status === "released" ? (
-                                <span className="text-emerald-400 text-[10px] font-bold">✓</span>
+                                <span className="text-green-600 dark:text-green-400 text-[10px] font-bold">✓</span>
                               ) : (
                                 <span className="text-primary text-[10px] font-bold">{i + 1}</span>
                               )}
@@ -1410,7 +1410,7 @@ export default function LiveRoom() {
                                   <button
                                     onClick={() => submitMilestone(m._id)}
                                     disabled={submittingMilestone === m._id}
-                                    className="text-[10px] text-violet-400/80 hover:text-violet-400 border border-violet-800/40 hover:border-violet-600/60 bg-violet-950/20 hover:bg-violet-950/40 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
+                                    className="text-[10px] text-blue-600/80 dark:text-blue-400/80 hover:text-blue-600 dark:text-blue-400 border border-blue-500/20 hover:border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/10 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
                                   >
                                     {submittingMilestone === m._id ? "..." : "↑ Submit for review"}
                                   </button>
@@ -1424,10 +1424,10 @@ export default function LiveRoom() {
                             )}
                             <div>
                               <span className={`text-[10px] px-1.5 py-0.5 rounded border capitalize ${
-                                m.status === "released" ? "text-emerald-400 bg-emerald-950/40 border-emerald-800/40" :
-                                m.status === "completed" ? "text-cyan-400 bg-cyan-950/40 border-cyan-800/40" :
-                                m.status === "submitted" ? "text-violet-400 bg-violet-950/40 border-violet-800/40" :
-                                m.status === "in_progress" ? "text-amber-400 bg-amber-950/40 border-amber-800/40" :
+                                m.status === "released" ? "text-green-600 dark:text-green-400 bg-green-500/10 border-green-500/20" :
+                                m.status === "completed" ? "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20" :
+                                m.status === "submitted" ? "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20" :
+                                m.status === "in_progress" ? "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20" :
                                 "text-muted-foreground bg-muted/30 border-border/40"
                               }`}>
                                 {m.status.replace("_", " ")}
@@ -1439,8 +1439,8 @@ export default function LiveRoom() {
                                 disabled={approvingMilestone === m._id}
                                 className={`text-[10px] border rounded px-1.5 py-0.5 transition-colors disabled:opacity-50 ${
                                   m.status === "submitted"
-                                    ? "text-emerald-300 bg-emerald-900/30 border-emerald-700/50 hover:bg-emerald-900/60 animate-pulse"
-                                    : "text-emerald-400/70 hover:text-emerald-400 border-emerald-800/40 hover:border-emerald-600/60 bg-emerald-950/20 hover:bg-emerald-950/40"
+                                    ? "text-green-700 dark:text-green-300 bg-green-500/10 border-green-500/30 hover:bg-green-500/15 animate-pulse"
+                                    : "text-green-600/80 dark:text-green-400/70 hover:text-green-600 dark:text-green-400 border-green-500/20 hover:border-green-500/40 bg-green-500/10 hover:bg-green-500/10"
                                 }`}
                               >
                                 {approvingMilestone === m._id ? "..." : "✓ Release"}
@@ -1453,7 +1453,7 @@ export default function LiveRoom() {
                     <div className="rounded-lg border border-border/30 bg-card/50 px-4 py-2.5 text-xs text-muted-foreground flex items-center justify-between">
                       <span>Total escrow</span>
                       <div className="flex items-center gap-3">
-                        <span className="text-emerald-400/70 font-mono">
+                        <span className="text-green-600/80 dark:text-green-400/70 font-mono">
                           ${milestones.filter((m: any) => m.status === "released").reduce((s: number, m: any) => s + (m.amountUsd ?? 0), 0).toLocaleString()} released
                         </span>
                         <span className="font-mono font-semibold text-foreground">
@@ -1594,10 +1594,10 @@ export default function LiveRoom() {
 
                     {nda.status !== "signed" && (
                       isSignedByMe ? (
-                        <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-4 py-3 text-center">
-                          <span className="text-xs text-emerald-400 font-medium">You have signed this NDA ✓</span>
+                        <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-4 py-3 text-center">
+                          <span className="text-xs text-green-600 dark:text-green-400 font-medium">You have signed this NDA ✓</span>
                           {nda.status === "pending_signatures" && (
-                            <p className="text-[11px] text-emerald-400/60 mt-0.5">Waiting for other parties to sign</p>
+                            <p className="text-[11px] text-green-600/70 dark:text-green-400/60 mt-0.5">Waiting for other parties to sign</p>
                           )}
                         </div>
                       ) : (
@@ -1617,8 +1617,8 @@ export default function LiveRoom() {
                     )}
 
                     {nda.status === "signed" && (
-                      <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-4 py-3 text-center">
-                        <span className="text-xs text-emerald-400 font-semibold">NDA fully signed — room is now contracted ✓</span>
+                      <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-4 py-3 text-center">
+                        <span className="text-xs text-green-600 dark:text-green-400 font-semibold">NDA fully signed — room is now contracted ✓</span>
                       </div>
                     )}
                   </>
@@ -1630,7 +1630,7 @@ export default function LiveRoom() {
           {isOwner && allRolesFilled && room.status === "open" && (
             <div className="shrink-0 border-t border-border/40 p-3">
               <Button
-                className="w-full glow-purple"
+                className="w-full"
                 onClick={() => assembleSquad.mutate({ id: roomId })}
                 disabled={assembleSquad.isPending}
               >
@@ -1688,9 +1688,9 @@ export default function LiveRoom() {
             ) : room.meetLink ? (
               <div className="flex items-center gap-1.5">
                 <a href={room.meetLink} target="_blank" rel="noreferrer" className="flex-1 block">
-                  <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-3 py-2 text-center hover:border-emerald-700/60 transition-colors">
-                    <div className="text-xs text-emerald-400 font-medium">Google Meet</div>
-                    <div className="text-[10px] text-emerald-400/60 mt-0.5">Click to join video call</div>
+                  <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-2 text-center hover:border-green-500/40 transition-colors">
+                    <div className="text-xs text-green-600 dark:text-green-400 font-medium">Google Meet</div>
+                    <div className="text-[10px] text-green-600/70 dark:text-green-400/60 mt-0.5">Click to join video call</div>
                   </div>
                 </a>
                 {isBusiness && (
@@ -1719,7 +1719,7 @@ export default function LiveRoom() {
                 </span>
               )}
               {!isFirebaseEnabled && !docMode && (
-                <span className="text-[9px] text-amber-400/70 font-medium">demo</span>
+                <span className="text-[9px] text-amber-600/80 dark:text-amber-400/70 font-medium">demo</span>
               )}
             </div>
             <div className="flex items-center gap-1">
@@ -1794,7 +1794,7 @@ export default function LiveRoom() {
                 <div>
                   <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Action Items</div>
                   {chatSummary.actionItems.map((a, i) => (
-                    <div key={i} className="text-[10px] text-foreground/70 flex gap-1"><span className="text-emerald-400 shrink-0">→</span>{a}</div>
+                    <div key={i} className="text-[10px] text-foreground/70 flex gap-1"><span className="text-green-600 dark:text-green-400 shrink-0">→</span>{a}</div>
                   ))}
                 </div>
               )}
@@ -1803,9 +1803,9 @@ export default function LiveRoom() {
 
           {/* Activity feed panel */}
           {showActivity && !docMode && (
-            <div className="shrink-0 border-b border-amber-800/30 bg-amber-950/10 p-3 max-h-52 overflow-y-auto space-y-1.5">
+            <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 p-3 max-h-52 overflow-y-auto space-y-1.5">
               <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] font-semibold text-amber-400/80 uppercase tracking-wider">Room Activity</span>
+                <span className="text-[10px] font-semibold text-amber-600/80 dark:text-amber-400/80 uppercase tracking-wider">Room Activity</span>
                 <button onClick={() => setShowActivity(false)} className="text-[9px] text-muted-foreground hover:text-foreground">✕</button>
               </div>
               {activityFeed.length === 0 ? (
@@ -1959,7 +1959,7 @@ export default function LiveRoom() {
 
               <Button
                 size="sm"
-                className="w-full text-xs h-7 glow-purple"
+                className="w-full text-xs h-7"
                 onClick={handleGenerateDoc}
                 disabled={genDocLoading}
               >

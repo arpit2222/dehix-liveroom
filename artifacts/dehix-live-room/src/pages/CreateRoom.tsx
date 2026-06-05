@@ -734,7 +734,7 @@ export default function CreateRoom() {
                 <span className={`text-xs ${description.length < 20 ? "text-muted-foreground/40" : "text-muted-foreground"}`}>
                   {description.length} chars {description.length < 20 && description.length > 0 ? "- add more detail" : ""}
                 </span>
-                <Button onClick={validateIdea} disabled={validating || description.trim().length < 20} className="glow-purple">
+                <Button onClick={validateIdea} disabled={validating || description.trim().length < 20} >
                   {validating ? (
                     <span className="flex items-center gap-2">
                       <span className="w-3 h-3 rounded-full border border-white/30 border-t-white animate-spin" />
@@ -795,13 +795,13 @@ export default function CreateRoom() {
                 <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Region</div>
                 <div className="text-lg font-semibold">{analysis.region_used ?? "Not specified"}</div>
                 {analysis.needs_clarification && (
-                  <p className="text-xs text-amber-400 mt-2">AI marked this idea as needing more clarity.</p>
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">AI marked this idea as needing more clarity.</p>
                 )}
               </div>
             </div>
 
             {analysis.needs_clarification && analysis.clarifying_questions && analysis.clarifying_questions.length > 0 && (
-              <div className="rounded-xl border border-amber-800/40 bg-amber-950/10 p-4">
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4">
                 <h3 className="text-sm font-semibold text-amber-300 mb-2">Clarifying questions from AI</h3>
                 <ul className="space-y-1.5">
                   {analysis.clarifying_questions.map((question, index) => (
@@ -846,7 +846,7 @@ export default function CreateRoom() {
             </div>
 
             <div className="flex items-center gap-3 pt-4 border-t border-border/40">
-              <Button className="flex-1 glow-purple h-12 text-base" onClick={loadTechnicalQuestions} disabled={loadingQuestions}>
+              <Button className="flex-1 h-12 text-base" onClick={loadTechnicalQuestions} disabled={loadingQuestions}>
                 {loadingQuestions ? (
                   <span className="flex items-center gap-2">
                     <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
@@ -908,7 +908,7 @@ export default function CreateRoom() {
               <Button variant="outline" className="h-12" onClick={() => setPhase("analysis")} disabled={generatingBlueprint}>
                 Back
               </Button>
-              <Button className="flex-1 glow-purple h-12 text-base" onClick={generateBlueprint} disabled={generatingBlueprint}>
+              <Button className="flex-1 h-12 text-base" onClick={generateBlueprint} disabled={generatingBlueprint}>
                 {generatingBlueprint ? (
                   <span className="flex items-center gap-2">
                     <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
@@ -940,7 +940,7 @@ export default function CreateRoom() {
                 <Button variant="outline" onClick={enterRoomDashboard} disabled={creatingRoom || loadingRecommendations}>
                   {creatingRoom ? "Preparing room..." : "Skip matches"}
                 </Button>
-                <Button className="glow-purple" onClick={generateTalentRecommendations} disabled={loadingRecommendations || creatingRoom}>
+                <Button  onClick={generateTalentRecommendations} disabled={loadingRecommendations || creatingRoom}>
                   {loadingRecommendations ? "Finding talent..." : "Generate phase 3 matches"}
                 </Button>
               </div>
@@ -967,7 +967,7 @@ export default function CreateRoom() {
                 <Button variant="outline" onClick={generateTalentRecommendations} disabled={loadingRecommendations || creatingRoom}>
                   {loadingRecommendations ? "Refreshing..." : "Refresh matches"}
                 </Button>
-                <Button className="glow-purple" onClick={enterRoomDashboard} disabled={creatingRoom || loadingRecommendations}>
+                <Button  onClick={enterRoomDashboard} disabled={creatingRoom || loadingRecommendations}>
                   {creatingRoom ? "Preparing room..." : "Enter room dashboard"}
                 </Button>
               </div>
@@ -1007,7 +1007,7 @@ export default function CreateRoom() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <h2 className="text-lg font-semibold truncate">{recommendation.user.name}</h2>
-                            <span className={`text-[10px] rounded border px-2 py-0.5 ${recommendation.user.isOnline ? "border-emerald-800/40 bg-emerald-950/30 text-emerald-400" : "border-border/50 bg-background/50 text-muted-foreground"}`}>
+                            <span className={`text-[10px] rounded border px-2 py-0.5 ${recommendation.user.isOnline ? "border-green-500/20 bg-green-500/10 text-green-600 dark:text-green-400" : "border-border/50 bg-background/50 text-muted-foreground"}`}>
                               {recommendation.user.isOnline ? "Available" : "Offline"}
                             </span>
                           </div>
@@ -1120,7 +1120,7 @@ export default function CreateRoom() {
               className="mb-2 min-h-[74px] w-full resize-none rounded-lg border border-border/50 bg-background/60 p-2 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
               disabled={!sessionData?._id || aiLoading}
             />
-            <Button className="h-8 w-full text-xs glow-purple" onClick={askLaunchAi} disabled={!sessionData?._id || !chatInput.trim() || aiLoading}>
+            <Button className="h-8 w-full text-xs" onClick={askLaunchAi} disabled={!sessionData?._id || !chatInput.trim() || aiLoading}>
               {aiLoading ? "Thinking..." : "Ask AI"}
             </Button>
           </div>

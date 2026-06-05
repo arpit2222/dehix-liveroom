@@ -190,7 +190,7 @@ export default function TalentDiscovery() {
               <label className="flex items-center gap-2 cursor-pointer pb-2">
                 <div
                   onClick={() => setOnlineOnly(!onlineOnly)}
-                  className={`w-9 h-5 rounded-full transition-colors relative cursor-pointer ${onlineOnly ? "bg-emerald-600" : "bg-muted"}`}
+                  className={`w-9 h-5 rounded-full transition-colors relative cursor-pointer ${onlineOnly ? "bg-green-600" : "bg-muted"}`}
                 >
                   <div className={`w-3.5 h-3.5 rounded-full bg-white absolute top-0.5 transition-transform ${onlineOnly ? "translate-x-4" : "translate-x-0.5"}`} />
                 </div>
@@ -273,7 +273,7 @@ export default function TalentDiscovery() {
                         <div className="flex items-center gap-2 mb-0.5">
                           <h3 className="font-semibold text-sm group-hover:text-primary transition-colors">{r.user.name}</h3>
                           {r.user.isOnline && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" title="Online" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title="Online" />
                           )}
                         </div>
                         <p className="text-xs text-primary font-medium">{r.primarySkill}</p>

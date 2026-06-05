@@ -10,6 +10,7 @@ setUnauthorizedHandler(() => {
   window.dispatchEvent(new Event("dehix:auth-cleared"));
 });
 
-document.documentElement.classList.add("dark");
+const savedTheme = localStorage.getItem("dehix_theme");
+document.documentElement.classList.toggle("dark", savedTheme === "dark");
 
 createRoot(document.getElementById("root")!).render(<App />);

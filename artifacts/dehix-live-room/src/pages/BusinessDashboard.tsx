@@ -7,12 +7,12 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
 const STATUS_COLORS: Record<string, string> = {
-  scoping: "text-blue-400 bg-blue-950/40 border-blue-800/40",
-  matching: "text-amber-400 bg-amber-950/40 border-amber-800/40",
-  open: "text-emerald-400 bg-emerald-950/40 border-emerald-800/40",
-  assembling: "text-violet-400 bg-violet-950/40 border-violet-800/40",
-  contracted: "text-cyan-400 bg-cyan-950/40 border-cyan-800/40",
-  closed: "text-gray-400 bg-gray-950/40 border-gray-700/40",
+  scoping: "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20",
+  matching: "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20",
+  open: "text-green-600 dark:text-green-400 bg-green-500/10 border-green-500/20",
+  assembling: "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20",
+  contracted: "text-green-600 dark:text-green-400 bg-green-500/10 border-green-500/20",
+  closed: "text-muted-foreground bg-muted border-border",
 };
 
 export default function BusinessDashboard() {
@@ -162,7 +162,7 @@ export default function BusinessDashboard() {
               },
             ].map((s) => (
               <div key={s.label} className="rounded-xl border border-border/40 bg-card p-4 text-center">
-                <div className={`text-2xl font-bold ${s.mono ? "font-mono text-emerald-400" : "text-foreground"}`}>{s.value}</div>
+                <div className={`text-2xl font-bold ${s.mono ? "font-mono text-green-600 dark:text-green-400" : "text-foreground"}`}>{s.value}</div>
                 {(s as any).sub && <div className="text-[10px] text-muted-foreground font-mono mt-0.5">{(s as any).sub}</div>}
                 <div className="text-xs text-muted-foreground mt-0.5">{s.label}</div>
               </div>
@@ -238,7 +238,7 @@ export default function BusinessDashboard() {
                       <div className="text-right shrink-0 space-y-1">
                         <div className="text-xs text-muted-foreground">{new Date(room.createdAt).toLocaleDateString()}</div>
                         {room.contractedAt && (
-                          <div className="text-[11px] text-cyan-400/70">Contracted {new Date(room.contractedAt).toLocaleDateString()}</div>
+                          <div className="text-[11px] text-blue-600/80 dark:text-blue-400/70">Contracted {new Date(room.contractedAt).toLocaleDateString()}</div>
                         )}
                       </div>
                     </div>
@@ -249,7 +249,7 @@ export default function BusinessDashboard() {
                       className="text-[11px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
                     >
                       {copiedCode === room.roomCode ? (
-                        <span className="text-emerald-400">✓ Copied!</span>
+                        <span className="text-green-600 dark:text-green-400">✓ Copied!</span>
                       ) : (
                         <>
                           <span>📋</span> Copy invite code
@@ -274,7 +274,7 @@ export default function BusinessDashboard() {
                         <div className="flex items-center gap-1.5">
                           <div className="w-16 h-1 bg-muted rounded-full overflow-hidden">
                             <div
-                              className="h-full bg-emerald-500 rounded-full transition-all"
+                              className="h-full bg-green-500 rounded-full transition-all"
                               style={{ width: `${Math.min(100, Math.round((room.milestoneStats.releasedUsd / (room.milestoneStats.totalUsd || 1)) * 100))}%` }}
                             />
                           </div>
@@ -311,7 +311,7 @@ export default function BusinessDashboard() {
                               toast.error("Failed to contract room");
                             }
                           }}
-                          className="text-[11px] text-cyan-400/80 hover:text-cyan-400 border border-cyan-800/40 hover:border-cyan-600/60 bg-cyan-950/20 hover:bg-cyan-950/40 rounded px-1.5 py-0.5 transition-colors"
+                          className="text-[11px] text-blue-600/80 dark:text-blue-400/80 hover:text-blue-600 dark:text-blue-400 border border-blue-500/20 hover:border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/10 rounded px-1.5 py-0.5 transition-colors"
                         >
                           ✓ Contract
                         </button>

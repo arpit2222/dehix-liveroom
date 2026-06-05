@@ -21,13 +21,12 @@ interface Props {
 export function SBTCredentialCard({ credential, compact = false }: Props) {
   return (
     <div
-      className={`relative overflow-hidden rounded-lg border border-border/50 bg-card p-4 transition-all duration-200 hover:border-primary/40 hover:glow-purple group ${compact ? "p-3" : ""}`}
+      className={`relative overflow-hidden rounded-lg border border-border/60 card p-4 shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-lg group ${compact ? "p-3" : ""}`}
     >
-      <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent pointer-events-none" />
       <div className="relative flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-mono font-bold text-primary/80 uppercase tracking-wider">
+            <span className="text-xs font-mono font-bold text-muted-foreground uppercase tracking-wider">
               L{credential.level} SBT
             </span>
             <StatusBadge status={credential.status} />
