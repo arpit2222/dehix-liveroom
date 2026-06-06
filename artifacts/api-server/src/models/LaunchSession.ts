@@ -16,6 +16,10 @@ export interface ILaunchSession extends Document {
   businessDocText?: string;
   technicalDocText?: string;
   technicalAnswersText?: string;
+  phase1Status?: "queued" | "generating" | "ready" | "failed";
+  phase1Error?: string;
+  phase2Status?: "queued" | "generating" | "ready" | "failed";
+  phase2Error?: string;
   businessValidationPdfStatus?: "pending" | "ready" | "failed";
   businessValidationPdfPath?: string;
   businessValidationPdfHash?: string;
@@ -51,6 +55,10 @@ const LaunchSessionSchema = new Schema<ILaunchSession>(
     businessDocText: { type: String },
     technicalDocText: { type: String },
     technicalAnswersText: { type: String },
+    phase1Status: { type: String, enum: ["queued", "generating", "ready", "failed"] },
+    phase1Error: { type: String },
+    phase2Status: { type: String, enum: ["queued", "generating", "ready", "failed"] },
+    phase2Error: { type: String },
     businessValidationPdfStatus: { type: String, enum: ["pending", "ready", "failed"] },
     businessValidationPdfPath: { type: String },
     businessValidationPdfHash: { type: String },

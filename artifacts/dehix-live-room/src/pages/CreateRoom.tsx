@@ -2,9 +2,19 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
+import { Search } from "lucide-react";
 import { toast } from "sonner";
 
 type WizardPhase = "idea" | "analysis" | "technical" | "blueprint" | "recommendations";
+type PhaseJobStatus = "queued" | "generating" | "ready" | "failed";
+type LaunchJob = { phase: "analysis" | "blueprint"; sessionId: string; status: PhaseJobStatus };
+type ReportSection = {
+  id: string;
+  title: string;
+  description?: string;
+  keywords?: string;
+  body: ReactNode;
+};
 
 type Question = {
   _id: string;
@@ -194,6 +204,176 @@ function formatCurrency(value?: number | null) {
   return `$${Math.round(value).toLocaleString()}`;
 }
 
+function stringifyForSearch(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (["string", "number", "boolean"].includes(typeof value)) return String(value);
+  if (Array.isArray(value)) return value.map(stringifyForSearch).join(" ");
+  if (typeof value === "object") return Object.values(value as Record<string, unknown>).map(stringifyForSearch).join(" ");
+  return "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => formatPrimitive(item)).filter(Boolean) : [];
+}
+
+function asRecordList(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === "object" && item !== null && !Array.isArray(item)) as Array<Record<string, unknown>>
+    : [];
+}
+
+function TextBlock({ children }: { children?: ReactNode }) {
+  if (!children) return null;
+  return <p className="text-sm leading-7 text-muted-foreground">{children}</p>;
+}
+
+function BulletList({ items }: { items?: string[] }) {
+  if (!items || items.length === 0) return <p className="text-sm text-muted-foreground">Not available</p>;
+  return (
+    <ul className="space-y-2">
+      {items.map((item, index) => (
+        <li key={index} className="flex gap-2 text-sm leading-6 text-muted-foreground">
+          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+          <span>{item}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function KeyValueGrid({ data }: { data: Record<string, unknown> }) {
+  const entries = Object.entries(data).filter(([, value]) => value !== undefined && value !== null && !Array.isArray(value));
+  if (entries.length === 0) return null;
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {entries.map(([key, value]) => (
+        <div key={key} className="rounded-lg border border-border/40 bg-background/35 p-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{humanizeKey(key)}</div>
+          <div className="text-sm leading-6 text-foreground">{formatPrimitive(value)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SimpleTable({ rows, columns }: { rows: Array<Record<string, unknown>>; columns: string[] }) {
+  if (rows.length === 0) return <p className="text-sm text-muted-foreground">Not available</p>;
+  return (
+    <div className="overflow-x-auto rounded-lg border border-border/40">
+      <table className="min-w-full divide-y divide-border/40 text-sm">
+        <thead className="bg-background/50">
+          <tr>
+            {columns.map((column) => (
+              <th key={column} className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                {humanizeKey(column)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/30">
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex}>
+              {columns.map((column) => (
+                <td key={column} className="px-3 py-3 align-top text-muted-foreground">
+                  {Array.isArray(row[column]) ? asStringList(row[column]).join(", ") : formatPrimitive(row[column])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ReportReader({ sections, initialSectionId }: { sections: ReportSection[]; initialSectionId?: string }) {
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(initialSectionId ?? sections[0]?.id ?? "");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredSections = normalizedQuery
+    ? sections.filter((section) =>
+        [section.title, section.description, section.keywords].join(" ").toLowerCase().includes(normalizedQuery)
+      )
+    : sections;
+  const selectedSection = filteredSections.find((section) => section.id === selectedId) ?? filteredSections[0] ?? sections[0];
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+      <aside className="rounded-xl border border-border/50 bg-card p-3 lg:sticky lg:top-20 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto">
+        <div className="relative mb-3">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search report"
+            className="h-10 w-full rounded-lg border border-border/50 bg-background/60 pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
+          />
+        </div>
+        <nav className="space-y-1">
+          {filteredSections.map((section) => {
+            const active = selectedSection?.id === section.id;
+            return (
+              <button
+                key={section.id}
+                onClick={() => setSelectedId(section.id)}
+                className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                  active
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-transparent text-muted-foreground hover:border-border/40 hover:bg-background/45 hover:text-foreground"
+                }`}
+              >
+                <span className="block text-sm font-medium">{section.title}</span>
+                {section.description && <span className="mt-1 block text-xs leading-5 opacity-75">{section.description}</span>}
+              </button>
+            );
+          })}
+          {filteredSections.length === 0 && (
+            <div className="rounded-lg border border-dashed border-border/50 px-3 py-6 text-center text-xs text-muted-foreground">
+              No matching sections
+            </div>
+          )}
+        </nav>
+      </aside>
+
+      <section className="min-w-0 rounded-xl border border-border/50 bg-card p-5 md:p-6">
+        {selectedSection ? (
+          <div className="space-y-5">
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wider text-primary">Selected section</div>
+              <h2 className="mt-1 text-2xl font-semibold tracking-tight">{selectedSection.title}</h2>
+              {selectedSection.description && <p className="mt-2 text-sm leading-6 text-muted-foreground">{selectedSection.description}</p>}
+            </div>
+            {selectedSection.body}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Select a report section to read.</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function JobProgressPanel({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="rounded-xl border border-border/50 bg-card p-6">
+      <div className="flex items-start gap-4">
+        <span className="mt-1 h-4 w-4 shrink-0 rounded-full border-2 border-primary/25 border-t-primary animate-spin" />
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{description}</p>
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-muted">
+            <div className="h-full w-2/3 rounded-full bg-primary/80 animate-pulse" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ScorePill({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-lg border border-border/40 bg-background/40 p-3">
@@ -275,6 +455,183 @@ function BlueprintValue({ value }: { value: unknown }): ReactNode {
   return null;
 }
 
+function renderRoadmap(value: unknown) {
+  const roadmap = asRecord(value);
+  const phases = Object.entries(roadmap);
+  if (phases.length === 0) return <p className="text-sm text-muted-foreground">Not available</p>;
+
+  return (
+    <div className="space-y-3">
+      {phases.map(([key, phase]) => {
+        const data = asRecord(phase);
+        return (
+          <div key={key} className="rounded-lg border border-border/40 bg-background/35 p-4">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <h3 className="text-sm font-semibold">{humanizeKey(key)}</h3>
+              {data.duration !== undefined && <span className="text-xs text-primary">{formatPrimitive(data.duration)}</span>}
+            </div>
+            <div className="mt-3">
+              <BulletList items={asStringList(data.deliverables)} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function renderCostEstimation(value: unknown) {
+  const cost = asRecord(value);
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-3 md:grid-cols-2">
+        {Object.entries(cost).filter(([, item]) => typeof item === "object" && item !== null && !Array.isArray(item)).map(([key, item]) => (
+          <div key={key} className="rounded-lg border border-border/40 bg-background/35 p-4">
+            <h3 className="mb-3 text-sm font-semibold">{humanizeKey(key)}</h3>
+            <KeyValueGrid data={asRecord(item)} />
+          </div>
+        ))}
+      </div>
+      <SectionList title="Major cost drivers" items={asStringList(cost.major_cost_drivers)} />
+    </div>
+  );
+}
+
+function renderTeamRequirements(value: unknown) {
+  const team = asRecord(value);
+  const recommended = asRecordList(team.recommended_team);
+  const columns = ["role", "responsibilities"];
+
+  return (
+    <div className="space-y-5">
+      <SimpleTable rows={recommended} columns={columns} />
+      <SectionList title="Minimum team" items={asStringList(team.minimum_team)} />
+    </div>
+  );
+}
+
+function renderMvpDefinition(value: unknown) {
+  const mvp = asRecord(value);
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="mb-3 text-sm font-semibold">Must-have features</h3>
+        <SimpleTable rows={asRecordList(mvp.must_have_features)} columns={["feature", "purpose", "priority"]} />
+      </div>
+      <div>
+        <h3 className="mb-3 text-sm font-semibold">Should-have features</h3>
+        <SimpleTable rows={asRecordList(mvp.should_have_features)} columns={["feature", "purpose"]} />
+      </div>
+      <div>
+        <h3 className="mb-3 text-sm font-semibold">Future features</h3>
+        <SimpleTable rows={asRecordList(mvp.future_features)} columns={["feature", "reason"]} />
+      </div>
+      <SectionList title="Excluded from MVP" items={asStringList(mvp.excluded_from_mvp)} />
+    </div>
+  );
+}
+
+function renderRiskAnalysis(value: unknown) {
+  const risks = asRecord(value);
+  return (
+    <div className="grid gap-5 lg:grid-cols-3">
+      {Object.entries(risks).map(([key, list]) => (
+        <div key={key} className="space-y-3">
+          <h3 className="text-sm font-semibold">{humanizeKey(key)}</h3>
+          {asRecordList(list).map((risk, index) => (
+            <div key={index} className="rounded-lg border border-border/40 bg-background/35 p-3">
+              <div className="text-sm font-medium">{formatPrimitive(risk.risk)}</div>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{formatPrimitive(risk.mitigation)}</p>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderTargetUsers(value: unknown) {
+  const users = asRecord(value);
+  return (
+    <div className="space-y-5">
+      <div>
+        <h3 className="mb-3 text-sm font-semibold">Primary users</h3>
+        <SimpleTable rows={asRecordList(users.primary_users)} columns={["persona", "description", "pain_points", "goals"]} />
+      </div>
+      <div>
+        <h3 className="mb-3 text-sm font-semibold">Secondary users</h3>
+        <SimpleTable rows={asRecordList(users.secondary_users)} columns={["persona", "description"]} />
+      </div>
+    </div>
+  );
+}
+
+function renderTechnicalArchitecture(value: unknown) {
+  const architecture = asRecord(value);
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="mb-3 text-sm font-semibold">Recommended stack</h3>
+        <KeyValueGrid data={asRecord(architecture.recommended_stack)} />
+      </div>
+      <div>
+        <h3 className="mb-3 text-sm font-semibold">System components</h3>
+        <SimpleTable rows={asRecordList(architecture.system_components)} columns={["component", "purpose"]} />
+      </div>
+      <div className="grid gap-5 md:grid-cols-2">
+        <SectionList title="API modules" items={asStringList(architecture.api_modules)} />
+        <SectionList title="Database entities" items={asStringList(architecture.database_entities)} />
+      </div>
+    </div>
+  );
+}
+
+function renderGroupedLists(value: unknown) {
+  const groups = asRecord(value);
+  return (
+    <div className="grid gap-5 md:grid-cols-2">
+      {Object.entries(groups).map(([key, item]) => (
+        <div key={key}>
+          <SectionList title={humanizeKey(key)} items={Array.isArray(item) ? asStringList(item) : [formatPrimitive(item)]} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderBlueprintSection(key: string, value: unknown): ReactNode {
+  if (key === "mvp_definition") return renderMvpDefinition(value);
+  if (key === "target_users") return renderTargetUsers(value);
+  if (key === "technical_architecture") return renderTechnicalArchitecture(value);
+  if (key === "development_roadmap") return renderRoadmap(value);
+  if (key === "team_requirements") return renderTeamRequirements(value);
+  if (key === "cost_estimation") return renderCostEstimation(value);
+  if (key === "risk_analysis") return renderRiskAnalysis(value);
+  if (["security_and_compliance", "business_model", "go_to_market", "founder_recommendations", "user_journey"].includes(key)) {
+    return renderGroupedLists(value);
+  }
+  return <BlueprintValue value={value} />;
+}
+
+const BLUEPRINT_SECTION_DESCRIPTIONS: Record<string, string> = {
+  executive_summary: "The shortest business read of the blueprint.",
+  problem_definition: "The customer problem and why current options fall short.",
+  target_users: "Primary and secondary users with their pains and goals.",
+  product_strategy: "Positioning, value proposition, and success metrics.",
+  mvp_definition: "What should be built now, later, and deliberately left out.",
+  user_journey: "How users enter, use, and return to the product.",
+  technical_architecture: "Stack, components, API modules, and data model.",
+  security_and_compliance: "Security, privacy, and compliance requirements.",
+  development_roadmap: "A practical phased build plan.",
+  team_requirements: "Recommended roles and minimum team composition.",
+  cost_estimation: "MVP budget, monthly costs, and major cost drivers.",
+  business_model: "Revenue streams and pricing direction.",
+  go_to_market: "Launch channels, acquisition, and early growth moves.",
+  risk_analysis: "Business, technical, and market risks with mitigations.",
+  founder_recommendations: "Actions before building, during development, and before launch.",
+  final_verdict: "Build decision and confidence signal.",
+};
+
 function BlueprintReport({ blueprint }: { blueprint: BlueprintResult }) {
   const orderedSections = BLUEPRINT_SECTION_ORDER
     .filter((key) => blueprint[key] !== undefined)
@@ -282,17 +639,106 @@ function BlueprintReport({ blueprint }: { blueprint: BlueprintResult }) {
   const remainingSections = Object.entries(blueprint).filter(
     ([key]) => !BLUEPRINT_SECTION_ORDER.includes(key) && key !== "step"
   );
+  const sections: ReportSection[] = [...orderedSections, ...remainingSections].map(([key, value]) => ({
+    id: key,
+    title: humanizeKey(key),
+    description: BLUEPRINT_SECTION_DESCRIPTIONS[key] ?? "Additional generated report detail.",
+    keywords: stringifyForSearch(value),
+    body: renderBlueprintSection(key, value),
+  }));
 
-  return (
-    <div className="space-y-5">
-      {[...orderedSections, ...remainingSections].map(([key, value]) => (
-        <section key={key} className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
-          <h2 className="text-lg font-semibold">{humanizeKey(key)}</h2>
-          <BlueprintValue value={value} />
-        </section>
-      ))}
-    </div>
-  );
+  return <ReportReader sections={sections} initialSectionId="executive_summary" />;
+}
+
+function AnalysisDetails({ analysis }: { analysis: AnalysisResult }) {
+  const research = analysis.research_analysis;
+  const scores = research?.dimensional_scores ?? {};
+  const sections: ReportSection[] = [
+    {
+      id: "scores",
+      title: "Scores",
+      description: "A quick read on how the idea performed.",
+      keywords: stringifyForSearch(scores),
+      body: (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          {Object.entries(SCORE_LABELS).map(([key, label]) => (
+            <div key={key} className="rounded-lg border border-border/40 bg-background/40 p-3">
+              <div className="text-xs text-muted-foreground mb-1">{label}</div>
+              <div className="text-xl font-semibold font-mono">{scores[key] ?? "N/A"}</div>
+            </div>
+          ))}
+        </div>
+      ),
+    },
+    {
+      id: "market",
+      title: "Market",
+      description: "Demand, audience, competitors, and moat.",
+      keywords: [research?.market_demand, research?.target_audience, research?.competitor_analysis, research?.competitive_moat].join(" "),
+      body: (
+        <div className="space-y-5">
+          <KeyValueGrid data={{
+            market_demand: research?.market_demand,
+            target_audience: research?.target_audience,
+            competitor_analysis: research?.competitor_analysis,
+            competitive_moat: research?.competitive_moat,
+          }} />
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">Go-to-market read</h3>
+            <TextBlock>{research?.go_to_market_strategy}</TextBlock>
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: "business",
+      title: "Business Model",
+      description: "Revenue, economics, and expected cost shape.",
+      keywords: [research?.revenue_model, research?.unit_economics, research?.cost_estimation].join(" "),
+      body: (
+        <KeyValueGrid data={{
+          revenue_model: research?.revenue_model,
+          unit_economics: research?.unit_economics,
+          cost_estimation: research?.cost_estimation,
+        }} />
+      ),
+    },
+    {
+      id: "risks",
+      title: "Risks and Suggestions",
+      description: "What can go wrong and what to do next.",
+      keywords: [...(research?.risks ?? []), ...(research?.suggestions ?? [])].join(" "),
+      body: (
+        <div className="grid gap-6 md:grid-cols-2">
+          <SectionList title="Top risks" items={research?.risks} />
+          <SectionList title="Recommended actions" items={research?.suggestions} />
+        </div>
+      ),
+    },
+    {
+      id: "swot",
+      title: "SWOT",
+      description: "Strengths, weaknesses, opportunities, and threats.",
+      keywords: stringifyForSearch(research?.swot),
+      body: (
+        <div className="grid gap-6 md:grid-cols-2">
+          <SectionList title="Strengths" items={research?.swot?.strengths} />
+          <SectionList title="Weaknesses" items={research?.swot?.weaknesses} />
+          <SectionList title="Opportunities" items={research?.swot?.opportunities} />
+          <SectionList title="Threats" items={research?.swot?.threats} />
+        </div>
+      ),
+    },
+    {
+      id: "assumptions",
+      title: "Assumptions",
+      description: "Unknowns the analysis depends on.",
+      keywords: (research?.assumptions ?? []).join(" "),
+      body: <BulletList items={research?.assumptions} />,
+    },
+  ];
+
+  return <ReportReader sections={sections} initialSectionId="scores" />;
 }
 
 export default function CreateRoom() {
@@ -311,6 +757,7 @@ export default function CreateRoom() {
   const [validating, setValidating] = useState(false);
   const [loadingQuestions, setLoadingQuestions] = useState(false);
   const [generatingBlueprint, setGeneratingBlueprint] = useState(false);
+  const [launchJob, setLaunchJob] = useState<LaunchJob | null>(null);
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
@@ -344,6 +791,72 @@ export default function CreateRoom() {
       loadLaunchChatHistory(sessionData._id);
     }
   }, [sessionData?._id]);
+
+  useEffect(() => {
+    if (!launchJob?.sessionId) return;
+
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+
+    const pollStatus = async () => {
+      try {
+        const res = await fetch(`/api/launch/${launchJob.sessionId}/status`, {
+          headers: { Authorization: `Bearer ${getToken()}` },
+        });
+        if (!res.ok) {
+          throw new Error(await readApiError(res, "Failed to check generation status"));
+        }
+        const data = await res.json();
+        if (cancelled) return;
+
+        if (data.session) setSessionData(data.session);
+        if (data.analysis) setAnalysis(data.analysis);
+        if (data.blueprint) setBlueprint(data.blueprint);
+
+        const status: PhaseJobStatus =
+          launchJob.phase === "analysis"
+            ? data.phase1Status ?? (data.analysis ? "ready" : "generating")
+            : data.phase2Status ?? (data.blueprint ? "ready" : "generating");
+
+        setLaunchJob((current) => current ? { ...current, status } : current);
+
+        if (status === "ready") {
+          setLaunchJob(null);
+          setValidating(false);
+          setGeneratingBlueprint(false);
+          setPhase(launchJob.phase);
+          toast.success(launchJob.phase === "analysis" ? "Business analysis is ready" : "Blueprint report is ready");
+        }
+
+        if (status === "failed") {
+          const msg = launchJob.phase === "analysis"
+            ? data.phase1Error ?? "Business analysis failed"
+            : data.phase2Error ?? "Blueprint generation failed";
+          setLaunchJob(null);
+          setValidating(false);
+          setGeneratingBlueprint(false);
+          setError(msg);
+          toast.error(msg);
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        const msg = err?.message ?? "Failed to check generation status";
+        setLaunchJob(null);
+        setValidating(false);
+        setGeneratingBlueprint(false);
+        setError(msg);
+        toast.error(msg);
+      }
+    };
+
+    pollStatus();
+    intervalId = setInterval(pollStatus, 2500);
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [launchJob?.sessionId, launchJob?.phase]);
 
   const askLaunchAi = async () => {
     const message = chatInput.trim();
@@ -443,14 +956,21 @@ export default function CreateRoom() {
       }
       const data = await res.json();
       setSessionData(data.session);
-      setAnalysis(data.analysis);
+      setAnalysis(data.analysis ?? null);
       setBlueprint(null);
+      setTalentRecommendationReport(null);
       setPhase("analysis");
+      if (data.analysis) {
+        setValidating(false);
+      } else if (data.session?._id) {
+        setLaunchJob({ phase: "analysis", sessionId: data.session._id, status: data.phase1Status ?? "generating" });
+      } else {
+        setValidating(false);
+      }
     } catch (err: any) {
       const msg = err?.message ?? "Failed to analyze idea";
       setError(msg);
       toast.error(msg);
-    } finally {
       setValidating(false);
     }
   };
@@ -582,11 +1102,17 @@ export default function CreateRoom() {
         setSessionData(data.session);
       }
       setPhase("blueprint");
+      if (data.blueprint) {
+        setGeneratingBlueprint(false);
+      } else if (data.session?._id) {
+        setLaunchJob({ phase: "blueprint", sessionId: data.session._id, status: data.phase2Status ?? "generating" });
+      } else {
+        setGeneratingBlueprint(false);
+      }
     } catch (err: any) {
       const msg = err?.message ?? "Failed to generate blueprint";
       setError(msg);
       toast.error(msg);
-    } finally {
       setGeneratingBlueprint(false);
     }
   };
@@ -661,7 +1187,6 @@ export default function CreateRoom() {
     }
   };
   const research = analysis?.research_analysis;
-  const scores = research?.dimensional_scores ?? {};
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -762,6 +1287,22 @@ export default function CreateRoom() {
           </div>
         )}
 
+        {phase === "analysis" && !analysis && (
+          <div className="space-y-6">
+            <div>
+              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Phase 1 output</div>
+              <h1 className="text-3xl font-bold tracking-tight mb-3">Business analysis is generating</h1>
+              <p className="text-muted-foreground max-w-2xl">
+                The full analysis is being saved to the launch session. You can keep this screen open while DEHIX prepares the complete output.
+              </p>
+            </div>
+            <JobProgressPanel
+              title="Generating Phase 1 report"
+              description="Market, audience, competitor, revenue, risk, SWOT, scores, and verdict sections are being produced in the background."
+            />
+          </div>
+        )}
+
         {phase === "analysis" && analysis && (
           <div className="space-y-7">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -811,39 +1352,7 @@ export default function CreateRoom() {
               </div>
             )}
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
-                <h2 className="font-semibold">Market view</h2>
-                <p className="text-sm text-muted-foreground leading-relaxed">{research?.market_demand}</p>
-                <p className="text-sm text-muted-foreground leading-relaxed">{research?.target_audience}</p>
-                <p className="text-sm text-muted-foreground leading-relaxed">{research?.competitor_analysis}</p>
-              </div>
-              <div className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
-                <h2 className="font-semibold">Business model</h2>
-                <p className="text-sm text-muted-foreground leading-relaxed">{research?.revenue_model}</p>
-                <p className="text-sm text-muted-foreground leading-relaxed">{research?.unit_economics}</p>
-                <p className="text-sm text-muted-foreground leading-relaxed">{research?.cost_estimation}</p>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-border/50 bg-card p-5">
-              <h2 className="font-semibold mb-4">Dimensional scores</h2>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                {Object.entries(SCORE_LABELS).map(([key, label]) => (
-                  <div key={key} className="rounded-lg border border-border/40 bg-background/40 p-3">
-                    <div className="text-xs text-muted-foreground mb-1">{label}</div>
-                    <div className="text-xl font-semibold font-mono">{scores[key] ?? "N/A"}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid gap-5 md:grid-cols-2">
-              <SectionList title="Risks" items={research?.risks} />
-              <SectionList title="Suggestions" items={research?.suggestions} />
-              <SectionList title="Strengths" items={research?.swot?.strengths} />
-              <SectionList title="Weaknesses" items={research?.swot?.weaknesses} />
-            </div>
+            <AnalysisDetails analysis={analysis} />
 
             <div className="flex items-center gap-3 pt-4 border-t border-border/40">
               <Button className="flex-1 h-12 text-base" onClick={loadTechnicalQuestions} disabled={loadingQuestions}>
@@ -917,6 +1426,22 @@ export default function CreateRoom() {
                 ) : "Generate phase 2 report"}
               </Button>
             </div>
+          </div>
+        )}
+
+        {phase === "blueprint" && !blueprint && (
+          <div className="space-y-6">
+            <div>
+              <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Phase 2 output</div>
+              <h1 className="text-3xl font-bold tracking-tight mb-3">Blueprint report is generating</h1>
+              <p className="text-muted-foreground max-w-2xl">
+                The complete business and development blueprint is being saved. Summary and detailed sections will appear as soon as the job finishes.
+              </p>
+            </div>
+            <JobProgressPanel
+              title="Generating Phase 2 blueprint"
+              description="Executive summary, MVP scope, architecture, roadmap, team, budget, GTM, risks, and recommendations are being prepared in the background."
+            />
           </div>
         )}
 

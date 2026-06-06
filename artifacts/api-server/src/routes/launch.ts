@@ -42,6 +42,19 @@ function parseAzureJson<T>(content: string): T {
   return JSON.parse(cleanJsonContent(content)) as T;
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : "Unknown error";
+}
+
+function parseStoredJson<T>(value?: string): T | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : [];
 }
@@ -457,6 +470,19 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   }
 
   try {
+    const session = await LaunchSession.create({
+      userId: req.userId,
+      rawIdea,
+      projectTitle: projectTitle || rawIdea.slice(0, 90),
+      status: "generating",
+      phase1Status: "generating",
+      phase2Status: "queued",
+    });
+
+    res.status(202).json({ session, phase1Status: "generating" });
+
+    void (async () => {
+      try {
     const prompt = `You are DEHIX_Idea_Analysis_JSON_Prompt.
 
 Purpose:
@@ -542,19 +568,49 @@ Return this exact JSON structure:
 
     const analysis = parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}");
     const titleSource = analysis?.idea_summary || projectTitle || rawIdea;
-    const session = await LaunchSession.create({
-      userId: req.userId,
-      rawIdea,
-      projectTitle: String(titleSource).slice(0, 90),
-      status: "reviewing",
-      summaryText: analysis?.idea_summary,
-      researchText: JSON.stringify(analysis),
-    });
+    session.projectTitle = String(titleSource).slice(0, 90);
+    session.status = "reviewing";
+    session.summaryText = analysis?.idea_summary;
+    session.researchText = JSON.stringify(analysis);
+    session.phase1Status = "ready";
+    session.phase1Error = undefined;
+    await session.save();
     warmBusinessValidationPdf(session);
 
-    res.status(201).json({ session, analysis });
+      } catch (err) {
+        req.log.error({ err, launchSessionId: session._id }, "Azure OpenAI failed to validate business idea");
+        await LaunchSession.findByIdAndUpdate(session._id, {
+          status: "draft",
+          phase1Status: "failed",
+          phase1Error: errorMessage(err),
+        });
+      }
+    })();
   } catch (err) {
     sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to validate business idea");
+  }
+});
+
+router.get("/:id/status", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const session = await LaunchSession.findOne({ _id: req.params.id, userId: req.userId });
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    res.json({
+      session,
+      phase1Status: session.phase1Status ?? (session.researchText ? "ready" : "queued"),
+      phase1Error: session.phase1Error,
+      phase2Status: session.phase2Status ?? (session.technicalDocText ? "ready" : "queued"),
+      phase2Error: session.phase2Error,
+      analysis: parseStoredJson<any>(session.researchText),
+      blueprint: parseStoredJson<any>(session.technicalDocText),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to fetch launch session status");
+    res.status(500).json({ error: "Failed to fetch launch session status" });
   }
 });
 
@@ -691,6 +747,16 @@ router.post("/:id/blueprint", requireAuth, async (req: AuthRequest, res) => {
     const technicalAnswersText = await buildTechnicalAnswersText(session._id as mongoose.Types.ObjectId, parsed.data.answers);
     const businessAnalysis = session.researchText ? JSON.parse(session.researchText) : {};
 
+    session.technicalAnswersText = technicalAnswersText;
+    session.phase2Status = "generating";
+    session.phase2Error = undefined;
+    session.status = "generating";
+    await session.save();
+
+    res.status(202).json({ session, phase2Status: "generating" });
+
+    void (async () => {
+      try {
     const blueprintSystemPrompt = `You are DEHIX_Business_Development_Blueprint_Generator version 1.0.
 
 Assistant identity:
@@ -843,12 +909,21 @@ Return this exact JSON structure. Fill every field with concrete, idea-specific 
 
     const blueprint = parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}");
     session.technicalDocText = JSON.stringify(blueprint);
-    session.technicalAnswersText = technicalAnswersText;
     session.status = "reviewing";
+    session.phase2Status = "ready";
+    session.phase2Error = undefined;
     await session.save();
     warmBusinessBlueprintPdf(session);
 
-    res.json({ session, blueprint });
+      } catch (err) {
+        req.log.error({ err, launchSessionId: session._id }, "Azure OpenAI failed to generate business development blueprint");
+        await LaunchSession.findByIdAndUpdate(session._id, {
+          status: "reviewing",
+          phase2Status: "failed",
+          phase2Error: errorMessage(err),
+        });
+      }
+    })();
   } catch (err) {
     sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate business development blueprint");
   }
