@@ -15,6 +15,17 @@ type ReportSection = {
   keywords?: string;
   body: ReactNode;
 };
+type ActiveReportSection = Pick<ReportSection, "id" | "title" | "description">;
+type ActiveQuestion = {
+  questionId: string;
+  question: string;
+  kind: "mandatory" | "optional";
+  index: number;
+};
+type SmartSuggestion = {
+  label: string;
+  prompt: string;
+};
 
 type Question = {
   _id: string;
@@ -290,7 +301,15 @@ function SimpleTable({ rows, columns }: { rows: Array<Record<string, unknown>>; 
   );
 }
 
-function ReportReader({ sections, initialSectionId }: { sections: ReportSection[]; initialSectionId?: string }) {
+function ReportReader({
+  sections,
+  initialSectionId,
+  onSectionChange,
+}: {
+  sections: ReportSection[];
+  initialSectionId?: string;
+  onSectionChange?: (section: ActiveReportSection) => void;
+}) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(initialSectionId ?? sections[0]?.id ?? "");
   const normalizedQuery = query.trim().toLowerCase();
@@ -300,6 +319,16 @@ function ReportReader({ sections, initialSectionId }: { sections: ReportSection[
       )
     : sections;
   const selectedSection = filteredSections.find((section) => section.id === selectedId) ?? filteredSections[0] ?? sections[0];
+
+  useEffect(() => {
+    if (selectedSection) {
+      onSectionChange?.({
+        id: selectedSection.id,
+        title: selectedSection.title,
+        description: selectedSection.description,
+      });
+    }
+  }, [selectedSection?.id, selectedSection?.title, selectedSection?.description, onSectionChange]);
 
   return (
     <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
@@ -632,7 +661,13 @@ const BLUEPRINT_SECTION_DESCRIPTIONS: Record<string, string> = {
   final_verdict: "Build decision and confidence signal.",
 };
 
-function BlueprintReport({ blueprint }: { blueprint: BlueprintResult }) {
+function BlueprintReport({
+  blueprint,
+  onSectionChange,
+}: {
+  blueprint: BlueprintResult;
+  onSectionChange?: (section: ActiveReportSection) => void;
+}) {
   const orderedSections = BLUEPRINT_SECTION_ORDER
     .filter((key) => blueprint[key] !== undefined)
     .map((key) => [key, blueprint[key]] as const);
@@ -647,10 +682,16 @@ function BlueprintReport({ blueprint }: { blueprint: BlueprintResult }) {
     body: renderBlueprintSection(key, value),
   }));
 
-  return <ReportReader sections={sections} initialSectionId="executive_summary" />;
+  return <ReportReader sections={sections} initialSectionId="executive_summary" onSectionChange={onSectionChange} />;
 }
 
-function AnalysisDetails({ analysis }: { analysis: AnalysisResult }) {
+function AnalysisDetails({
+  analysis,
+  onSectionChange,
+}: {
+  analysis: AnalysisResult;
+  onSectionChange?: (section: ActiveReportSection) => void;
+}) {
   const research = analysis.research_analysis;
   const scores = research?.dimensional_scores ?? {};
   const sections: ReportSection[] = [
@@ -738,7 +779,101 @@ function AnalysisDetails({ analysis }: { analysis: AnalysisResult }) {
     },
   ];
 
-  return <ReportReader sections={sections} initialSectionId="scores" />;
+  return <ReportReader sections={sections} initialSectionId="scores" onSectionChange={onSectionChange} />;
+}
+
+function buildSmartSuggestions({
+  phase,
+  activeReportSection,
+  activeQuestion,
+}: {
+  phase: WizardPhase;
+  activeReportSection: ActiveReportSection | null;
+  activeQuestion: ActiveQuestion | null;
+}): SmartSuggestion[] {
+  if (phase === "technical" && activeQuestion) {
+    const prefix = activeQuestion.kind === "mandatory" ? `Mandatory question ${activeQuestion.index + 1}` : `Optional question ${activeQuestion.index + 1}`;
+    return [
+      {
+        label: "Recommend answer",
+        prompt: `${prefix}: "${activeQuestion.question}"\n\nRecommend a strong, practical answer for this business idea. Keep it specific and non-technical enough for a founder.`,
+      },
+      {
+        label: "Explain question",
+        prompt: `${prefix}: "${activeQuestion.question}"\n\nExplain what this question means, why it matters for the build plan, and what details I should include.`,
+      },
+      {
+        label: "Improve my answer",
+        prompt: `${prefix}: "${activeQuestion.question}"\n\nReview my current answer from the form context and rewrite it to be clearer, more complete, and more useful for generating the blueprint.`,
+      },
+    ];
+  }
+
+  if ((phase === "analysis" || phase === "blueprint") && activeReportSection) {
+    const sectionName = activeReportSection.title;
+    const base = `Current report section: ${sectionName}`;
+    const sectionId = activeReportSection.id.toLowerCase();
+
+    if (sectionId.includes("swot")) {
+      return [
+        { label: "Summarize SWOT", prompt: `${base}\n\nSummarize this SWOT section in simple founder-friendly language.` },
+        { label: "Turn into actions", prompt: `${base}\n\nConvert the SWOT section into prioritized next actions for the founder.` },
+        { label: "Biggest weakness", prompt: `${base}\n\nWhich weakness or threat is the most urgent, and how should I handle it first?` },
+      ];
+    }
+
+    if (sectionId.includes("risk")) {
+      return [
+        { label: "Prioritize risks", prompt: `${base}\n\nRank the risks by urgency and explain the first mitigation step for each.` },
+        { label: "Reduce risk", prompt: `${base}\n\nGive me practical ways to reduce the most important risks before building.` },
+        { label: "Investor concerns", prompt: `${base}\n\nWhat concerns would an investor or senior operator raise after reading this risk section?` },
+      ];
+    }
+
+    if (sectionId.includes("mvp")) {
+      return [
+        { label: "Tighten MVP", prompt: `${base}\n\nSuggest a leaner MVP scope and explain what can be delayed without hurting launch quality.` },
+        { label: "Feature priority", prompt: `${base}\n\nPrioritize these MVP features by user value, build effort, and launch dependency.` },
+        { label: "Missing feature", prompt: `${base}\n\nIdentify any critical MVP feature that may be missing or underspecified.` },
+      ];
+    }
+
+    if (sectionId.includes("cost")) {
+      return [
+        { label: "Explain budget", prompt: `${base}\n\nExplain the budget estimate in plain language and highlight the biggest cost drivers.` },
+        { label: "Reduce cost", prompt: `${base}\n\nSuggest ways to reduce MVP cost without damaging the core product outcome.` },
+        { label: "Budget risks", prompt: `${base}\n\nWhat budget assumptions are risky or need validation before hiring?` },
+      ];
+    }
+
+    if (sectionId.includes("team")) {
+      return [
+        { label: "Hiring plan", prompt: `${base}\n\nTurn this team section into a practical hiring plan with role priority and sequencing.` },
+        { label: "Minimum team", prompt: `${base}\n\nExplain the minimum team needed to ship the first usable version.` },
+        { label: "Role tradeoffs", prompt: `${base}\n\nWhat role tradeoffs can we make if budget or timeline is tight?` },
+      ];
+    }
+
+    return [
+      { label: `Summarize ${sectionName}`, prompt: `${base}\n\nSummarize this section into the key points I should remember.` },
+      { label: "Next decisions", prompt: `${base}\n\nWhat decisions should I make based on this section before moving forward?` },
+      { label: "Explain simply", prompt: `${base}\n\nExplain this section in simpler language and call out anything that needs validation.` },
+    ];
+  }
+
+  if (phase === "idea") {
+    return [
+      { label: "Improve idea", prompt: "Help me make this business idea clearer and stronger before analysis." },
+      { label: "What details matter?", prompt: "What details should I include so Phase 1 can produce a better business analysis?" },
+      { label: "Check clarity", prompt: "Review my current idea input and tell me what is missing or vague." },
+    ];
+  }
+
+  return [
+    { label: "What next?", prompt: "Based on the current launch flow context, what should I do next?" },
+    { label: "Explain status", prompt: "Explain where I am in the launch flow and what the next decision is." },
+    { label: "Find gaps", prompt: "Find the most important gaps or unanswered questions in the current launch context." },
+  ];
 }
 
 export default function CreateRoom() {
@@ -766,6 +901,8 @@ export default function CreateRoom() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
+  const [activeReportSection, setActiveReportSection] = useState<ActiveReportSection | null>(null);
+  const [activeQuestion, setActiveQuestion] = useState<ActiveQuestion | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const scrollChatToBottom = () => {
@@ -791,6 +928,15 @@ export default function CreateRoom() {
       loadLaunchChatHistory(sessionData._id);
     }
   }, [sessionData?._id]);
+
+  useEffect(() => {
+    if (phase !== "technical") {
+      setActiveQuestion(null);
+    }
+    if (phase !== "analysis" && phase !== "blueprint") {
+      setActiveReportSection(null);
+    }
+  }, [phase]);
 
   useEffect(() => {
     if (!launchJob?.sessionId) return;
@@ -858,8 +1004,8 @@ export default function CreateRoom() {
     };
   }, [launchJob?.sessionId, launchJob?.phase]);
 
-  const askLaunchAi = async () => {
-    const message = chatInput.trim();
+  const askLaunchAi = async (suggestedMessage?: string) => {
+    const message = (suggestedMessage ?? chatInput).trim();
     if (!message || aiLoading) return;
     if (!sessionData?._id) {
       toast.info("Analyze the business idea first, then the AI can use the saved Phase 1 context.");
@@ -882,6 +1028,8 @@ export default function CreateRoom() {
     try {
       const clientContext = [
         `Current frontend phase: ${phase}`,
+        `Active report section:\n${activeReportSection ? `${activeReportSection.title} (${activeReportSection.id})` : "No report section selected."}`,
+        `Focused Phase 2 question:\n${activeQuestion ? `${activeQuestion.kind} question ${activeQuestion.index + 1}: ${activeQuestion.question}\nCurrent answer: ${answers[activeQuestion.questionId]?.trim() || "Not answered yet"}` : "No Phase 2 question focused."}`,
         `Current idea input:\n${description || "Not available"}`,
         `Mandatory Phase 2 questions and currently typed answers:\n${mandatoryQuestions.map((question, index) => {
           const answer = answers[question._id]?.trim();
@@ -1187,6 +1335,7 @@ export default function CreateRoom() {
     }
   };
   const research = analysis?.research_analysis;
+  const smartSuggestions = buildSmartSuggestions({ phase, activeReportSection, activeQuestion });
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -1352,7 +1501,7 @@ export default function CreateRoom() {
               </div>
             )}
 
-            <AnalysisDetails analysis={analysis} />
+            <AnalysisDetails analysis={analysis} onSectionChange={setActiveReportSection} />
 
             <div className="flex items-center gap-3 pt-4 border-t border-border/40">
               <Button className="flex-1 h-12 text-base" onClick={loadTechnicalQuestions} disabled={loadingQuestions}>
@@ -1386,6 +1535,7 @@ export default function CreateRoom() {
                   <textarea
                     value={answers[question._id] || ""}
                     onChange={(event) => setAnswers({ ...answers, [question._id]: event.target.value })}
+                    onFocus={() => setActiveQuestion({ questionId: question._id, question: question.question, kind: "mandatory", index })}
                     placeholder="Answer in plain language..."
                     className="w-full bg-card text-foreground placeholder:text-muted-foreground/40 resize-none p-4 rounded-xl border border-border/50 outline-none text-sm focus:border-primary/40 transition-colors min-h-[92px]"
                   />
@@ -1404,6 +1554,7 @@ export default function CreateRoom() {
                       <textarea
                         value={answers[question._id] || ""}
                         onChange={(event) => setAnswers({ ...answers, [question._id]: event.target.value })}
+                        onFocus={() => setActiveQuestion({ questionId: question._id, question: question.question, kind: "optional", index })}
                         placeholder="Optional answer..."
                         className="w-full bg-card text-foreground placeholder:text-muted-foreground/40 resize-none p-4 rounded-xl border border-border/50 outline-none text-sm focus:border-primary/40 transition-colors min-h-[92px]"
                       />
@@ -1471,7 +1622,7 @@ export default function CreateRoom() {
               </div>
             </div>
 
-            <BlueprintReport blueprint={blueprint} />
+            <BlueprintReport blueprint={blueprint} onSectionChange={setActiveReportSection} />
           </div>
         )}
 
@@ -1632,6 +1783,31 @@ export default function CreateRoom() {
           </div>
 
           <div className="shrink-0 border-t border-border/40 p-3">
+            {sessionData?._id && smartSuggestions.length > 0 && (
+              <div className="mb-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Suggested prompts</span>
+                  {(activeQuestion || activeReportSection) && (
+                    <span className="max-w-[170px] truncate text-[10px] text-primary">
+                      {activeQuestion ? `Q${activeQuestion.index + 1}` : activeReportSection?.title}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {smartSuggestions.map((suggestion) => (
+                    <button
+                      key={suggestion.label}
+                      type="button"
+                      onClick={() => askLaunchAi(suggestion.prompt)}
+                      disabled={aiLoading}
+                      className="rounded-md border border-border/45 bg-background/55 px-2.5 py-1.5 text-left text-[11px] font-medium text-foreground/80 transition-colors hover:border-primary/35 hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {suggestion.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <textarea
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
@@ -1645,7 +1821,7 @@ export default function CreateRoom() {
               className="mb-2 min-h-[74px] w-full resize-none rounded-lg border border-border/50 bg-background/60 p-2 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
               disabled={!sessionData?._id || aiLoading}
             />
-            <Button className="h-8 w-full text-xs" onClick={askLaunchAi} disabled={!sessionData?._id || !chatInput.trim() || aiLoading}>
+            <Button className="h-8 w-full text-xs" onClick={() => askLaunchAi()} disabled={!sessionData?._id || !chatInput.trim() || aiLoading}>
               {aiLoading ? "Thinking..." : "Ask AI"}
             </Button>
           </div>
