@@ -349,6 +349,16 @@ export const CreateLaunchSessionBody = zod.object({
   "projectTitle": zod.string().optional()
 })
 
+export const ConfirmPhase1OutputBody = zod.object({
+  "region": zod.string().optional(),
+  "ideaSummary": zod.string().optional(),
+  "targetAudience": zod.string().optional(),
+  "businessModel": zod.string().optional(),
+  "competitors": zod.string().optional(),
+  "marketDemand": zod.string().optional(),
+  "goToMarket": zod.string().optional()
+})
+
 
 /**
  * @summary Generate full project scope using idea and answers, creating a room

@@ -38,6 +38,7 @@ type AnalysisResult = {
   clarifying_questions?: string[];
   region_used?: string;
   idea_summary?: string;
+  business_confirmed_inputs?: Record<string, unknown>;
   research_analysis?: {
     market_demand?: string;
     target_audience?: string;
@@ -61,6 +62,16 @@ type AnalysisResult = {
     final_verdict?: string;
     verdict_reasoning?: string;
   };
+};
+
+type Phase1ReviewForm = {
+  region: string;
+  ideaSummary: string;
+  targetAudience: string;
+  businessModel: string;
+  competitors: string;
+  marketDemand: string;
+  goToMarket: string;
 };
 
 type BlueprintResult = Record<string, unknown>;
@@ -235,6 +246,19 @@ function asRecordList(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value)
     ? value.filter((item) => typeof item === "object" && item !== null && !Array.isArray(item)) as Array<Record<string, unknown>>
     : [];
+}
+
+function buildPhase1ReviewForm(analysis?: AnalysisResult | null): Phase1ReviewForm {
+  const research = analysis?.research_analysis ?? {};
+  return {
+    region: analysis?.region_used?.trim() || "India",
+    ideaSummary: analysis?.idea_summary?.trim() || "",
+    targetAudience: research.target_audience?.trim() || "",
+    businessModel: research.revenue_model?.trim() || "",
+    competitors: research.competitor_analysis?.trim() || "",
+    marketDemand: research.market_demand?.trim() || "",
+    goToMarket: research.go_to_market_strategy?.trim() || "",
+  };
 }
 
 function TextBlock({ children }: { children?: ReactNode }) {
@@ -884,12 +908,15 @@ export default function CreateRoom() {
   const [description, setDescription] = useState("");
   const [sessionData, setSessionData] = useState<any>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [phase1Review, setPhase1Review] = useState<Phase1ReviewForm>(() => buildPhase1ReviewForm(null));
+  const [phase1ReviewTouched, setPhase1ReviewTouched] = useState(false);
   const [blueprint, setBlueprint] = useState<BlueprintResult | null>(null);
   const [mandatoryQuestions, setMandatoryQuestions] = useState<Question[]>([]);
   const [optionalQuestions, setOptionalQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [validating, setValidating] = useState(false);
+  const [savingPhase1Review, setSavingPhase1Review] = useState(false);
   const [loadingQuestions, setLoadingQuestions] = useState(false);
   const [generatingBlueprint, setGeneratingBlueprint] = useState(false);
   const [launchJob, setLaunchJob] = useState<LaunchJob | null>(null);
@@ -928,6 +955,12 @@ export default function CreateRoom() {
       loadLaunchChatHistory(sessionData._id);
     }
   }, [sessionData?._id]);
+
+  useEffect(() => {
+    if (analysis && !phase1ReviewTouched) {
+      setPhase1Review(buildPhase1ReviewForm(analysis));
+    }
+  }, [analysis, phase1ReviewTouched]);
 
   useEffect(() => {
     if (phase !== "technical") {
@@ -1089,6 +1122,7 @@ export default function CreateRoom() {
     if (!description.trim() || description.length < 20 || validating) return;
     setValidating(true);
     setError("");
+    setPhase1ReviewTouched(false);
     try {
       const title = description.trim().slice(0, 60) + (description.length > 60 ? "..." : "");
       const res = await fetch("/api/launch", {
@@ -1105,6 +1139,9 @@ export default function CreateRoom() {
       const data = await res.json();
       setSessionData(data.session);
       setAnalysis(data.analysis ?? null);
+      if (data.analysis) {
+        setPhase1Review(buildPhase1ReviewForm(data.analysis));
+      }
       setBlueprint(null);
       setTalentRecommendationReport(null);
       setPhase("analysis");
@@ -1120,6 +1157,51 @@ export default function CreateRoom() {
       setError(msg);
       toast.error(msg);
       setValidating(false);
+    }
+  };
+
+  const updatePhase1ReviewField = (field: keyof Phase1ReviewForm, value: string) => {
+    setPhase1ReviewTouched(true);
+    setPhase1Review((current) => ({ ...current, [field]: value }));
+  };
+
+  const confirmPhase1Review = async () => {
+    if (!sessionData?._id || savingPhase1Review) return false;
+    setSavingPhase1Review(true);
+    setError("");
+    try {
+      const payload: Phase1ReviewForm = {
+        ...phase1Review,
+        region: phase1Review.region.trim() || "India",
+      };
+      const res = await fetch(`/api/launch/${sessionData._id}/phase1-confirmation`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${getToken()}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Failed to save Phase 1 edits"));
+      }
+      const data = await res.json();
+      if (data.session) setSessionData(data.session);
+      if (data.analysis) {
+        setAnalysis(data.analysis);
+        setPhase1Review(buildPhase1ReviewForm(data.analysis));
+      }
+      setBlueprint(data.blueprint ?? null);
+      setTalentRecommendationReport(null);
+      setPhase1ReviewTouched(false);
+      return true;
+    } catch (err: any) {
+      const msg = err?.message ?? "Failed to save Phase 1 edits";
+      setError(msg);
+      toast.error(msg);
+      return false;
+    } finally {
+      setSavingPhase1Review(false);
     }
   };
 
@@ -1181,14 +1263,14 @@ export default function CreateRoom() {
     }
   };
 
-  const loadTechnicalQuestions = async () => {
-    if (!sessionData?._id || loadingQuestions) return;
+  const loadTechnicalQuestions = async (sessionId = sessionData?._id) => {
+    if (!sessionId || loadingQuestions) return;
     setLoadingQuestions(true);
     setError("");
     setMandatoryQuestions(FALLBACK_MANDATORY_QUESTIONS);
     setOptionalQuestions([]);
     try {
-      const res = await fetch(`/api/launch/${sessionData._id}/technical-questions`, {
+      const res = await fetch(`/api/launch/${sessionId}/technical-questions`, {
         method: "POST",
         headers: { Authorization: `Bearer ${getToken()}` },
       });
@@ -1211,6 +1293,15 @@ export default function CreateRoom() {
       toast.error(msg);
     } finally {
       setLoadingQuestions(false);
+    }
+  };
+
+  const confirmPhase1AndLoadQuestions = async () => {
+    if (!sessionData?._id || savingPhase1Review || loadingQuestions) return;
+    const saved = await confirmPhase1Review();
+    if (saved) {
+      toast.success("Phase 1 assumptions saved");
+      await loadTechnicalQuestions(sessionData._id);
     }
   };
 
@@ -1490,6 +1581,96 @@ export default function CreateRoom() {
               </div>
             </div>
 
+            <div className="rounded-xl border border-primary/20 bg-card p-5 space-y-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wider text-primary">Business review</div>
+                  <h2 className="mt-1 text-xl font-semibold">Confirm Phase 1 assumptions</h2>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                    Edit anything the AI assumed incorrectly. Phase 2 will use this confirmed version.
+                  </p>
+                </div>
+                {sessionData?.phase1ConfirmedAt && (
+                  <span className="rounded-md border border-green-500/20 bg-green-500/10 px-2.5 py-1 text-xs font-medium text-green-600 dark:text-green-400">
+                    Confirmed
+                  </span>
+                )}
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-foreground">Region</span>
+                  <input
+                    value={phase1Review.region}
+                    onChange={(event) => updatePhase1ReviewField("region", event.target.value)}
+                    placeholder="India"
+                    className="h-11 w-full rounded-lg border border-border/50 bg-background/60 px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
+                  />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-foreground">Target customers</span>
+                  <input
+                    value={phase1Review.targetAudience}
+                    onChange={(event) => updatePhase1ReviewField("targetAudience", event.target.value)}
+                    placeholder="Who the business will serve"
+                    className="h-11 w-full rounded-lg border border-border/50 bg-background/60 px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-foreground">Business model</span>
+                  <textarea
+                    value={phase1Review.businessModel}
+                    onChange={(event) => updatePhase1ReviewField("businessModel", event.target.value)}
+                    placeholder="Subscription, commission, B2B SaaS, one-time service, marketplace, etc."
+                    className="min-h-[96px] w-full resize-none rounded-lg border border-border/50 bg-background/60 p-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
+                  />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-foreground">Competitor context</span>
+                  <textarea
+                    value={phase1Review.competitors}
+                    onChange={(event) => updatePhase1ReviewField("competitors", event.target.value)}
+                    placeholder="Known competitors, alternatives, or market category"
+                    className="min-h-[96px] w-full resize-none rounded-lg border border-border/50 bg-background/60 p-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
+                  />
+                </label>
+              </div>
+
+              <label className="space-y-2 block">
+                <span className="text-sm font-medium text-foreground">Idea summary</span>
+                <textarea
+                  value={phase1Review.ideaSummary}
+                  onChange={(event) => updatePhase1ReviewField("ideaSummary", event.target.value)}
+                  placeholder="Short corrected description of the business idea"
+                  className="min-h-[88px] w-full resize-none rounded-lg border border-border/50 bg-background/60 p-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
+                />
+              </label>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-foreground">Market demand notes</span>
+                  <textarea
+                    value={phase1Review.marketDemand}
+                    onChange={(event) => updatePhase1ReviewField("marketDemand", event.target.value)}
+                    placeholder="What demand, pain, or opportunity should Phase 2 consider?"
+                    className="min-h-[96px] w-full resize-none rounded-lg border border-border/50 bg-background/60 p-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
+                  />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-foreground">Go-to-market notes</span>
+                  <textarea
+                    value={phase1Review.goToMarket}
+                    onChange={(event) => updatePhase1ReviewField("goToMarket", event.target.value)}
+                    placeholder="Launch channel, sales motion, geography-specific GTM, or distribution notes"
+                    className="min-h-[96px] w-full resize-none rounded-lg border border-border/50 bg-background/60 p-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/40"
+                  />
+                </label>
+              </div>
+            </div>
+
             {analysis.needs_clarification && analysis.clarifying_questions && analysis.clarifying_questions.length > 0 && (
               <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4">
                 <h3 className="text-sm font-semibold text-amber-300 mb-2">Clarifying questions from AI</h3>
@@ -1504,13 +1685,13 @@ export default function CreateRoom() {
             <AnalysisDetails analysis={analysis} onSectionChange={setActiveReportSection} />
 
             <div className="flex items-center gap-3 pt-4 border-t border-border/40">
-              <Button className="flex-1 h-12 text-base" onClick={loadTechnicalQuestions} disabled={loadingQuestions}>
-                {loadingQuestions ? (
+              <Button className="flex-1 h-12 text-base" onClick={confirmPhase1AndLoadQuestions} disabled={loadingQuestions || savingPhase1Review}>
+                {loadingQuestions || savingPhase1Review ? (
                   <span className="flex items-center gap-2">
                     <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                    Preparing questions...
+                    {savingPhase1Review ? "Saving Phase 1..." : "Preparing questions..."}
                   </span>
-                ) : "Move to technical questions"}
+                ) : "Confirm Phase 1 and continue"}
               </Button>
             </div>
           </div>
@@ -1607,6 +1788,9 @@ export default function CreateRoom() {
                 </p>
               </div>
               <div className="flex gap-2 shrink-0">
+                <Button variant="outline" onClick={() => setPhase("analysis")} disabled={downloadingBlueprintPdf || creatingRoom || loadingRecommendations}>
+                  Edit Phase 1
+                </Button>
                 <Button variant="outline" onClick={() => setPhase("technical")} disabled={downloadingBlueprintPdf || creatingRoom || loadingRecommendations}>
                   Edit answers
                 </Button>

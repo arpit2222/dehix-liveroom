@@ -13,6 +13,8 @@ export interface ILaunchSession extends Document {
   
   summaryText?: string;
   researchText?: string;
+  phase1AiOutputText?: string;
+  phase1ConfirmedAt?: Date;
   businessDocText?: string;
   technicalDocText?: string;
   technicalAnswersText?: string;
@@ -52,6 +54,8 @@ const LaunchSessionSchema = new Schema<ILaunchSession>(
     },
     summaryText: { type: String },
     researchText: { type: String },
+    phase1AiOutputText: { type: String },
+    phase1ConfirmedAt: { type: Date },
     businessDocText: { type: String },
     technicalDocText: { type: String },
     technicalAnswersText: { type: String },

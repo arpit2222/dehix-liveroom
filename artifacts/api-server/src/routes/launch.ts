@@ -13,7 +13,7 @@ import { LaunchSession } from "../models/LaunchSession.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { SbtCredential } from "../models/SbtCredential.js";
-import { CreateLaunchSessionBody, ScopeLaunchSessionBody } from "@workspace/api-zod";
+import { ConfirmPhase1OutputBody, CreateLaunchSessionBody, ScopeLaunchSessionBody } from "@workspace/api-zod";
 
 const router = Router();
 
@@ -57,6 +57,61 @@ function parseStoredJson<T>(value?: string): T | null {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : [];
+}
+
+function firstNonEmpty(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function ensureDefaultRegion(analysis: any): any {
+  if (!analysis || typeof analysis !== "object") {
+    return { region_used: "India" };
+  }
+  analysis.region_used = firstNonEmpty(analysis.region_used) ?? "India";
+  return analysis;
+}
+
+function mergeBusinessConfirmedPhase1(analysis: any, input: unknown): any {
+  const existing = ensureDefaultRegion(analysis && typeof analysis === "object" ? analysis : {});
+  const research = existing.research_analysis && typeof existing.research_analysis === "object"
+    ? existing.research_analysis
+    : {};
+  existing.research_analysis = research;
+
+  const parsed = ConfirmPhase1OutputBody.parse(input);
+  const region = firstNonEmpty(parsed.region, existing.region_used) ?? "India";
+  const ideaSummary = firstNonEmpty(parsed.ideaSummary, existing.idea_summary);
+  const targetAudience = firstNonEmpty(parsed.targetAudience, research.target_audience);
+  const businessModel = firstNonEmpty(parsed.businessModel, research.revenue_model);
+  const competitors = firstNonEmpty(parsed.competitors, research.competitor_analysis);
+  const marketDemand = firstNonEmpty(parsed.marketDemand, research.market_demand);
+  const goToMarket = firstNonEmpty(parsed.goToMarket, research.go_to_market_strategy);
+
+  existing.region_used = region;
+  if (ideaSummary) existing.idea_summary = ideaSummary;
+  if (targetAudience) research.target_audience = targetAudience;
+  if (businessModel) research.revenue_model = businessModel;
+  if (competitors) research.competitor_analysis = competitors;
+  if (marketDemand) research.market_demand = marketDemand;
+  if (goToMarket) research.go_to_market_strategy = goToMarket;
+
+  existing.business_confirmed_inputs = {
+    region,
+    idea_summary: ideaSummary ?? "",
+    target_audience: targetAudience ?? "",
+    business_model: businessModel ?? "",
+    competitor_context: competitors ?? "",
+    market_demand: marketDemand ?? "",
+    go_to_market_strategy: goToMarket ?? "",
+    confirmed_at: new Date().toISOString(),
+  };
+
+  return existing;
 }
 
 function formatBusinessValidationLines(analysis: any): Array<{ text: string; size?: number; gapAfter?: number }> {
@@ -503,6 +558,7 @@ Workflow:
 Rules:
 - Ask clarification questions only when the idea is vague.
 - Ask only impactful questions about target user, core problem, region, budget, or business model.
+- If the user does not clearly provide a region, set region_used exactly to "India".
 - Score each dimension from 0 to 10.
 - Be critical. Most ideas should score between 4 and 7. Reserve 8+ only for genuinely strong ideas.
 - Use practical market reasoning. If exact research is unavailable, state the assumption instead of inventing facts.
@@ -566,7 +622,7 @@ Return this exact JSON structure:
       max_completion_tokens: 4096,
     });
 
-    const analysis = parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}");
+    const analysis = ensureDefaultRegion(parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}"));
     const titleSource = analysis?.idea_summary || projectTitle || rawIdea;
     session.projectTitle = String(titleSource).slice(0, 90);
     session.status = "reviewing";
@@ -605,12 +661,70 @@ router.get("/:id/status", requireAuth, async (req: AuthRequest, res) => {
       phase1Error: session.phase1Error,
       phase2Status: session.phase2Status ?? (session.technicalDocText ? "ready" : "queued"),
       phase2Error: session.phase2Error,
-      analysis: parseStoredJson<any>(session.researchText),
+      analysis: session.researchText ? ensureDefaultRegion(parseStoredJson<any>(session.researchText)) : null,
       blueprint: parseStoredJson<any>(session.technicalDocText),
     });
   } catch (err) {
     req.log.error({ err }, "Failed to fetch launch session status");
     res.status(500).json({ error: "Failed to fetch launch session status" });
+  }
+});
+
+router.put("/:id/phase1-confirmation", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = ConfirmPhase1OutputBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid Phase 1 confirmation input" });
+    return;
+  }
+
+  try {
+    const session = await LaunchSession.findOne({ _id: req.params.id, userId: req.userId });
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    const currentAnalysis = parseStoredJson<any>(session.researchText) ?? {};
+    const nextAnalysis = mergeBusinessConfirmedPhase1(currentAnalysis, parsed.data);
+    const nextResearchText = JSON.stringify(nextAnalysis);
+    const phase1Changed = session.researchText !== nextResearchText;
+
+    if (!session.phase1AiOutputText) {
+      session.phase1AiOutputText = session.researchText ?? nextResearchText;
+    }
+
+    session.researchText = nextResearchText;
+    session.summaryText = nextAnalysis?.idea_summary;
+    session.phase1ConfirmedAt = new Date();
+    session.phase1Status = "ready";
+    session.phase1Error = undefined;
+
+    if (phase1Changed) {
+      await LaunchClarification.deleteMany({ sessionId: session._id });
+      session.technicalDocText = undefined;
+      session.businessDocText = undefined;
+      session.phase2Status = "queued";
+      session.phase2Error = undefined;
+      session.businessBlueprintPdfStatus = undefined;
+      session.businessBlueprintPdfPath = undefined;
+      session.businessBlueprintPdfHash = undefined;
+      session.businessBlueprintPdfError = undefined;
+      session.businessBlueprintPdfGeneratedAt = undefined;
+    }
+
+    await session.save();
+    warmBusinessValidationPdf(session);
+
+    res.json({
+      session,
+      analysis: nextAnalysis,
+      phase1Status: session.phase1Status,
+      phase2Status: session.phase2Status ?? "queued",
+      blueprint: null,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to confirm Phase 1 output");
+    res.status(500).json({ error: "Failed to confirm Phase 1 output" });
   }
 });
 
@@ -656,7 +770,7 @@ async function handleTechnicalQuestions(req: AuthRequest, res: Response) {
       return;
     }
 
-    const analysis = session.researchText ? JSON.parse(session.researchText) : {};
+    const analysis = ensureDefaultRegion(session.researchText ? JSON.parse(session.researchText) : {});
     const prompt = `You are a senior product manager preparing simple technical discovery questions for a non-technical business owner.
 
 Business idea:
@@ -745,7 +859,7 @@ router.post("/:id/blueprint", requireAuth, async (req: AuthRequest, res) => {
 
     await persistDynamicAnswers(session._id as mongoose.Types.ObjectId, parsed.data.answers);
     const technicalAnswersText = await buildTechnicalAnswersText(session._id as mongoose.Types.ObjectId, parsed.data.answers);
-    const businessAnalysis = session.researchText ? JSON.parse(session.researchText) : {};
+    const businessAnalysis = ensureDefaultRegion(session.researchText ? JSON.parse(session.researchText) : {});
 
     session.technicalAnswersText = technicalAnswersText;
     session.phase2Status = "generating";
@@ -1056,7 +1170,7 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
       .join("\n\n");
     session.technicalAnswersText = technicalAnswersText;
 
-    const businessAnalysis = session.researchText ? JSON.parse(session.researchText) : {};
+    const businessAnalysis = ensureDefaultRegion(session.researchText ? JSON.parse(session.researchText) : {});
     const businessBlueprint = session.technicalDocText ? JSON.parse(session.technicalDocText) : null;
     const talentRecommendationReport = session.businessDocText ? JSON.parse(session.businessDocText) : null;
     const fullDescription = `Original Idea:\n${session.rawIdea}
