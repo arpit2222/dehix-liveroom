@@ -664,6 +664,13 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   bd_strategy: "BD Strategy",
   sow: "Statement of Work",
   project_brief: "Project Brief",
+  idea_validation_report: "Idea Validation Report",
+  business_requirement_document: "Business Requirement Document",
+  project_requirement_document: "Project Requirement Document",
+  mvp_scope_document: "MVP Scope Document",
+  technical_architecture_document: "Technical Architecture Document",
+  feature_list_document: "Feature List Document",
+  development_roadmap: "Development Roadmap",
 };
 
 router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => {
@@ -700,6 +707,13 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
     bd_strategy: `You are a go-to-market strategy expert. Generate a comprehensive BD strategy document from this research conversation. Include: Market Opportunity, Target Segments (with profiles and pain points), Value Proposition, Go-to-Market Strategy, Partnership Strategy, Revenue Model & Pricing, Sales Process, KPIs. Be specific with numbers and channels.`,
     sow: `You are a contract specialist. Generate a detailed Statement of Work from this research conversation. Include: Project Overview, Scope of Work (in scope and out of scope), Deliverables with milestones, Timeline, Team Structure with rates, Assumptions & Dependencies, Change Management, Payment Schedule (milestone escrow), Acceptance Criteria, Signature blocks. Be legally precise.`,
     project_brief: `You are a senior product manager. Generate a comprehensive project brief from this research conversation. Include: Executive Summary, Background & Context, Business Objectives, Functional Requirements (P0/P1/P2), Technical Requirements, Out of Scope, Success Criteria, Risk Register, and Stakeholders. Be thorough and specific.`,
+    idea_validation_report: `You are an expert startup consultant and VC analyst. Given the research conversation context, generate a detailed, professional Idea Validation Report in plain text format. Explain whether the business idea is viable, needs work, or is highly risky. Include sections for: Market Demand Analysis, Target Audience Profiling, Competitive Landscape, Primary Risks & Hurdles, and Actionable Suggestions/Recommendations. Use ═══ and ─── dividers for sections.`,
+    business_requirement_document: `You are a senior business analyst. Given the research conversation context, generate a comprehensive Business Requirement Document (BRD) in plain text format. Include sections for: Business Need (problem statement & business value), Strategic Goals, User Problems Solved, Expected Outcomes & Benefits, Success Criteria & Key Performance Indicators (KPIs), and Business Rules/Constraints. Use ═══ and ─── dividers for sections.`,
+    project_requirement_document: `You are a lead product manager. Given the research conversation context, generate a detailed Product/Project Requirement Document (PRD) in plain text format. Include sections for: Product Overview, User Roles & Personas, Key Features & Functional Specifications, Detailed System Workflows, Expected System Behavior (handling success and failure cases), and Out-of-Scope items. Use ═══ and ─── dividers for sections.`,
+    mvp_scope_document: `You are an experienced startup advisor and product manager. Given the research conversation context, generate a precise MVP Scope Document in plain text format. Include sections for: MVP Goal & Value Proposition, Must-Have Features (V1 Core), Nice-to-Have Features (Deferred to V2), Strictly Excluded/Out-of-Scope Items (to prevent scope creep), and Strategic Scoping Rationale. Use ═══ and ─── dividers for sections.`,
+    technical_architecture_document: `You are a principal software architect and CTO. Given the research conversation context, generate a comprehensive Technical Architecture Document in plain text format. Include sections for: System Overview & Architecture Diagram (in ASCII format), Recommended Frontend Stack (with reasons), Recommended Backend & Database Stack (with reasons), APIs & Integration Points, Security & Authentication Strategy, Infrastructure/Hosting Plan, and Critical Tradeoffs/Risks. Use ═══ and ─── dividers for sections.`,
+    feature_list_document: `You are a product management and engineering lead. Given the research conversation context, generate a detailed Feature List Document in plain text format. List all required features grouped by product modules (e.g. Authentication, Core Workflows, Payments). Prioritize each feature with a clear priority level: Must-Have (P0), Should-Have (P1), or Future Feature (P2). For each feature, provide a brief description of what it does and why it is included. Use ═══ and ─── dividers for sections.`,
+    development_roadmap: `You are a senior project manager and scrum master. Given the research conversation context, generate a clear, execution-focused Development Roadmap in plain text format. Organize the roadmap into phases: Phase 1: Research & Discovery, Phase 2: Design & Prototyping, Phase 3: MVP Development, Phase 4: Testing & Quality Assurance, Phase 5: Launch & Post-Launch Improvements. For each phase, provide estimated durations, key milestones, and critical deliverables. Use ═══ and ─── dividers for sections.`,
   };
 
   let content: string;
@@ -779,6 +793,41 @@ Project: ${room?.title ?? "Web3 Project"}`;
     res.json(JSON.parse(cleaned));
   } catch (err) {
     sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to summarize conversation");
+  }
+});
+
+router.get("/documents/:id/pdf", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const doc = await GeneratedDoc.findById(req.params.id);
+    if (!doc) {
+      res.status(404).json({ error: "Document not found" });
+      return;
+    }
+
+    if (doc.roomId) {
+      const room = await LiveRoom.findById(doc.roomId);
+      if (room) {
+        const isOwner = String(room.businessId) === req.userId;
+        const isParticipant = await RoomParticipant.exists({ roomId: room._id, userId: req.userId });
+        if (!isOwner && !isParticipant) {
+          res.status(403).json({ error: "You do not have access to this document" });
+          return;
+        }
+      }
+    } else if (doc.createdBy && doc.createdBy !== req.userId) {
+      res.status(403).json({ error: "You do not have access to this document" });
+      return;
+    }
+
+    const { buildGeneratedDocPdf } = await import("../lib/reportPdf.js");
+    const pdf = await buildGeneratedDocPdf(doc.title, doc.documentType, doc.content);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${doc.title.replace(/\s+/g, "-").toLowerCase()}.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    req.log.error({ err }, "Failed to generate document PDF");
+    res.status(500).json({ error: "Failed to generate document PDF" });
   }
 });
 
