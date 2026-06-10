@@ -19,6 +19,7 @@ type ReportMeta = {
   verdict?: unknown;
   score?: unknown;
   region?: unknown;
+  theme?: { brand: string; brandDark: string };
 };
 
 function escapeHtml(value: unknown): string {
@@ -137,10 +138,22 @@ function renderSection(title: string, content: string, accent = ""): string {
 }
 
 function renderHero(meta: ReportMeta): string {
+  const hasPanel = meta.score != null || meta.verdict != null;
   const score = parseScore(meta.score);
   const scorePercent = score === undefined ? 0 : Math.max(0, Math.min(100, score * 10));
 
-  return `<header class="hero">
+  const panel = hasPanel ? `
+    <div class="hero-panel">
+      <div class="verdict-label">Verdict</div>
+      <div class="verdict-value">${escapeHtml(formatValue(meta.verdict ?? "In review"))}</div>
+      <div class="hero-score ${scoreTone(meta.score)}">
+        <strong>${escapeHtml(score === undefined ? "N/A" : String(score))}</strong>
+        <span>/10</span>
+      </div>
+      <div class="score-track hero-track"><div style="width: ${scorePercent}%"></div></div>
+    </div>` : "";
+
+  return `<header class="hero${hasPanel ? "" : " hero-clean"}">
     <div class="hero-copy">
       <div class="eyebrow">${escapeHtml(meta.eyebrow)}</div>
       <h1>${escapeHtml(meta.title)}</h1>
@@ -150,19 +163,18 @@ function renderHero(meta: ReportMeta): string {
         ${meta.region ? `<span>${escapeHtml(formatValue(meta.region))}</span>` : ""}
       </div>
     </div>
-    <div class="hero-panel">
-      <div class="verdict-label">Verdict</div>
-      <div class="verdict-value">${escapeHtml(formatValue(meta.verdict ?? "In review"))}</div>
-      <div class="hero-score ${scoreTone(meta.score)}">
-        <strong>${escapeHtml(score === undefined ? "N/A" : String(score))}</strong>
-        <span>/10</span>
-      </div>
-      <div class="score-track hero-track"><div style="width: ${scorePercent}%"></div></div>
-    </div>
+    ${panel}
   </header>`;
 }
 
 function baseHtml(meta: ReportMeta, body: string): string {
+  const customStyles = meta.theme ? `
+    :root {
+      --brand: ${meta.theme.brand};
+      --brand-dark: ${meta.theme.brandDark};
+    }
+  ` : "";
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -185,6 +197,7 @@ function baseHtml(meta: ReportMeta, body: string): string {
       --red: #b91c1c;
       --violet: #6d28d9;
     }
+    ${customStyles}
 
     * { box-sizing: border-box; }
 
@@ -210,7 +223,12 @@ function baseHtml(meta: ReportMeta, body: string): string {
       gap: 28px;
       padding: 34px 40px 28px;
       color: #ffffff;
-      background: linear-gradient(135deg, #123f8c 0%, #1967d2 48%, #0d9488 100%);
+      background: linear-gradient(135deg, var(--brand-dark) 0%, var(--brand) 100%);
+    }
+
+    .hero-clean {
+      grid-template-columns: 1fr;
+      padding: 38px 40px 32px;
     }
 
     .eyebrow {
@@ -570,6 +588,7 @@ export async function buildBusinessValidationPdf(title: string, analysis: any): 
     verdict: research?.final_verdict,
     score: research?.overall_score,
     region: analysis?.region_used,
+    theme: { brand: "#0d9488", brandDark: "#0f766e" },
   }, body));
 }
 
@@ -675,5 +694,486 @@ export async function buildBusinessBlueprintPdf(title: string, blueprint: any): 
     eyebrow: "DEHIX Business Blueprint",
     verdict,
     score,
+    theme: { brand: "#1e40af", brandDark: "#1e3a8a" },
   }, sections.join("")));
 }
+
+function parseDocContentToHtml(content: string): string {
+  const lines = content.split("\n");
+  let html = "";
+  let inList = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) {
+      if (inList) {
+        html += "</ul>";
+        inList = false;
+      }
+      continue;
+    }
+
+    if (line.includes("═") || line.includes("─")) {
+      if (inList) {
+        html += "</ul>";
+        inList = false;
+      }
+      const cleanText = line.replace(/[═─\s]+/g, "").trim();
+      if (cleanText) {
+        html += `<h2 class="doc-section-header">${escapeHtml(cleanText)}</h2>`;
+      } else {
+        html += '<hr class="doc-divider" />';
+      }
+      continue;
+    }
+
+    if (line.startsWith("###")) {
+      if (inList) {
+        html += "</ul>";
+        inList = false;
+      }
+      const headingText = line.replace(/^###\s*/, "").trim();
+      html += `<h3>${escapeHtml(headingText)}</h3>`;
+      continue;
+    }
+
+    if (line.startsWith("•") || line.startsWith("-") || line.startsWith("*")) {
+      if (!inList) {
+        html += "<ul>";
+        inList = true;
+      }
+      const listItemText = line.replace(/^[•\-*]\s*/, "").trim();
+      html += `<li>${escapeHtml(listItemText)}</li>`;
+      continue;
+    }
+
+    if (inList) {
+      html += "</ul>";
+      inList = false;
+    }
+
+    if (line.length < 80 && /^[A-Z0-9\s&()\-:,./]+$/.test(line) && !line.includes(".")) {
+      html += `<h4 class="doc-subsection-header">${escapeHtml(line)}</h4>`;
+    } else {
+      html += `<p>${escapeHtml(line)}</p>`;
+    }
+  }
+
+  if (inList) {
+    html += "</ul>";
+  }
+
+  return html;
+}
+
+const DOC_TYPE_THEMES: Record<string, { brand: string; brandDark: string; eyebrow: string }> = {
+  idea_validation_report: { brand: "#0d9488", brandDark: "#115e59", eyebrow: "DEHIX Idea Validation Report" },
+  business_requirement_document: { brand: "#1e40af", brandDark: "#1e3a8a", eyebrow: "DEHIX Business Requirement Document" },
+  project_requirement_document: { brand: "#2563eb", brandDark: "#1e40af", eyebrow: "DEHIX Project Requirement Document" },
+  mvp_scope_document: { brand: "#7c3aed", brandDark: "#5b21b6", eyebrow: "DEHIX MVP Scope Document" },
+  technical_architecture_document: { brand: "#475569", brandDark: "#1e293b", eyebrow: "DEHIX Technical Architecture Specification" },
+  feature_list_document: { brand: "#4f46e5", brandDark: "#3730a3", eyebrow: "DEHIX Feature List Document" },
+  development_roadmap: { brand: "#d97706", brandDark: "#92400e", eyebrow: "DEHIX Development Roadmap" },
+  pitch_deck: { brand: "#0d9488", brandDark: "#115e59", eyebrow: "DEHIX Pitch Deck" },
+  technical_deck: { brand: "#475569", brandDark: "#1e293b", eyebrow: "DEHIX Technical Deck" },
+  bd_strategy: { brand: "#4f46e5", brandDark: "#3730a3", eyebrow: "DEHIX Business Development Strategy" },
+  sow: { brand: "#7c3aed", brandDark: "#5b21b6", eyebrow: "DEHIX Statement of Work" },
+  project_brief: { brand: "#1e40af", brandDark: "#1e3a8a", eyebrow: "DEHIX Project Brief" }
+};
+
+export async function buildGeneratedDocPdf(title: string, documentType: string, content: string): Promise<Buffer> {
+  const parsedHtml = parseDocContentToHtml(content);
+  
+  const theme = DOC_TYPE_THEMES[documentType] || { brand: "#1967d2", brandDark: "#123f8c", eyebrow: "DEHIX AI Generated Document" };
+
+  const docMeta = {
+    title,
+    subtitle: `A polished ${humanizeKey(documentType)} document generated from user conversation.`,
+    eyebrow: theme.eyebrow,
+  };
+
+  const finalHtml = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(docMeta.title)}</title>
+  <style>
+    :root {
+      --ink: #18212f;
+      --muted: #647084;
+      --line: #dde5ef;
+      --paper: #ffffff;
+      --brand: ${theme.brand};
+      --brand-dark: ${theme.brandDark};
+      --aqua: ${theme.brand};
+    }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .page {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 40px;
+      background: var(--paper);
+    }
+    .header {
+      border-bottom: 2px solid var(--brand);
+      padding-bottom: 20px;
+      margin-bottom: 30px;
+    }
+    .eyebrow {
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 5px;
+      letter-spacing: 0.5px;
+    }
+    h1 {
+      font-size: 24px;
+      color: var(--brand-dark);
+      font-weight: 850;
+      margin: 0 0 5px;
+    }
+    .subtitle {
+      font-size: 11px;
+      color: var(--muted);
+      margin: 0;
+    }
+    .doc-section-header {
+      font-size: 15px;
+      color: var(--brand-dark);
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 4px;
+      margin-top: 25px;
+      margin-bottom: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .doc-subsection-header {
+      font-size: 12px;
+      color: var(--ink);
+      margin-top: 15px;
+      margin-bottom: 6px;
+      font-weight: 750;
+    }
+    h3 {
+      font-size: 12px;
+      color: var(--aqua);
+      margin-top: 15px;
+      margin-bottom: 6px;
+      font-weight: 750;
+    }
+    p {
+      margin: 0 0 10px;
+      line-height: 1.6;
+    }
+    ul {
+      margin: 0 0 12px;
+      padding-left: 20px;
+    }
+    li {
+      margin-bottom: 4px;
+    }
+    .doc-divider {
+      border: 0;
+      border-top: 1px dashed var(--line);
+      margin: 20px 0;
+    }
+    @page { size: A4; margin: 0; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <div class="eyebrow">${escapeHtml(docMeta.eyebrow)}</div>
+      <h1>${escapeHtml(docMeta.title)}</h1>
+      <p class="subtitle">${escapeHtml(docMeta.subtitle)}</p>
+    </header>
+    <div class="content">${parsedHtml}</div>
+  </main>
+</body>
+</html>`;
+
+  return renderPdf(finalHtml);
+}
+
+export async function buildExecutiveSummaryPdf(title: string, blueprint: any): Promise<Buffer> {
+  const exec = blueprint?.executive_summary ?? {};
+  const prob = blueprint?.problem_definition ?? {};
+  const strat = blueprint?.product_strategy ?? {};
+
+  const body = [
+    renderSection(
+      "Overview",
+      renderFieldGrid([
+        { label: "Idea Name", value: exec?.idea_name },
+        { label: "Launch Strategy", value: exec?.recommended_launch_strategy },
+        { label: "Target Market", value: exec?.target_market },
+        { label: "One Line Description", value: exec?.one_line_description },
+      ])
+    ),
+    renderSection(
+      "Strategic Goal",
+      `<article class="info-card medium"><h3>Business Goal</h3><p>${escapeHtml(exec?.business_goal || "Not available.")}</p></article>`
+    ),
+    renderSection(
+      "Problem Definition",
+      `<div class="card-grid">
+        ${renderInfoCard("Problem Statement", prob?.problem_statement)}
+        ${renderInfoCard("Current Alternatives", undefined, asStringArray(prob?.current_alternatives))}
+        ${renderInfoCard("Why Existing Solutions Fail", undefined, asStringArray(prob?.why_existing_solutions_fail), "caution")}
+      </div>`
+    ),
+    renderSection(
+      "Product Strategy",
+      `<div class="card-grid">
+        ${renderInfoCard("Core Value Proposition", strat?.core_value_proposition)}
+        ${renderInfoCard("Product Positioning", strat?.product_positioning)}
+      </div>
+      <div class="nested-block">
+        <h3>Competitive Advantages</h3>
+        ${renderList(asStringArray(strat?.competitive_advantage))}
+      </div>
+      <div class="nested-block">
+        <h3>Success Metrics</h3>
+        ${renderList(asStringArray(strat?.key_success_metrics))}
+      </div>`
+    )
+  ].join("");
+
+  return renderPdf(baseHtml({
+    title,
+    subtitle: "A high-level report detailing the value proposition, strategy, and problem definition.",
+    eyebrow: "DEHIX Executive Summary",
+    theme: { brand: "#0d9488", brandDark: "#115e59" }
+  }, body));
+}
+
+export async function buildMvpScopePdf(title: string, blueprint: any): Promise<Buffer> {
+  const mvp = blueprint?.mvp_definition ?? {};
+  const mustHaves = Array.isArray(mvp?.must_have_features) ? mvp.must_have_features : [];
+  const shouldHaves = Array.isArray(mvp?.should_have_features) ? mvp.should_have_features : [];
+  const future = Array.isArray(mvp?.future_features) ? mvp.future_features : [];
+  const excluded = asStringArray(mvp?.excluded_from_mvp || mvp?.excluded);
+
+  const mustHaveCards = mustHaves.map((item: any, idx: number) => {
+    return `<article class="info-card strong">
+      <h3>${escapeHtml(item?.feature || `Feature ${idx + 1}`)}</h3>
+      <p><strong>Purpose:</strong> ${escapeHtml(item?.purpose || "Core requirement.")}</p>
+    </article>`;
+  }).join("");
+
+  const shouldHaveCards = shouldHaves.map((item: any, idx: number) => {
+    return `<article class="info-card">
+      <h3>${escapeHtml(item?.feature || `Feature ${idx + 1}`)}</h3>
+      <p>${escapeHtml(item?.purpose || "Important but deferred requirement.")}</p>
+    </article>`;
+  }).join("");
+
+  const futureCards = future.map((item: any, idx: number) => {
+    return `<article class="info-card medium">
+      <h3>${escapeHtml(item?.feature || `Feature ${idx + 1}`)}</h3>
+      <p><strong>Reason deferred:</strong> ${escapeHtml(item?.reason || "Future consideration.")}</p>
+    </article>`;
+  }).join("");
+
+  const body = [
+    renderSection(
+      "MVP Goal & Core Value",
+      `<p class="lead">${escapeHtml(mvp?.core_value_proposition || mvp?.mvp_goal || "Core scope boundaries defined for initial launch.")}</p>`
+    ),
+    renderSection(
+      "Must-Have Core Features (P0)",
+      `<div class="card-grid">${mustHaveCards || '<p class="muted">No critical features listed.</p>'}</div>`
+    ),
+    renderSection(
+      "Should-Have Features (P1)",
+      `<div class="card-grid">${shouldHaveCards || '<p class="muted">No secondary features listed.</p>'}</div>`
+    ),
+    renderSection(
+      "Future Considerations (P2)",
+      `<div class="card-grid">${futureCards || '<p class="muted">No future features listed.</p>'}</div>`
+    ),
+    renderSection(
+      "Strictly Excluded from MVP",
+      `<article class="info-card caution">
+        <h3>Out of Scope Boundaries</h3>
+        <p>To avoid scope creep, the following items are strictly excluded from version 1:</p>
+        ${renderList(excluded)}
+      </article>`
+    )
+  ].join("");
+
+  return renderPdf(baseHtml({
+    title,
+    subtitle: "Detailed MVP scope limits and prioritization boundaries to control scope creep.",
+    eyebrow: "DEHIX MVP Scope",
+    theme: { brand: "#7c3aed", brandDark: "#5b21b6" }
+  }, body));
+}
+
+export async function buildTechnicalArchitecturePdf(title: string, blueprint: any): Promise<Buffer> {
+  const arch = blueprint?.technical_architecture ?? {};
+  const security = blueprint?.security_and_compliance ?? {};
+  const stack = arch?.recommended_stack ?? {};
+  const components = Array.isArray(arch?.system_components) ? arch.system_components : [];
+
+  const stackFields = [
+    { label: "Frontend Framework", value: stack?.frontend },
+    { label: "Backend API Framework", value: stack?.backend },
+    { label: "Database Layer", value: stack?.database },
+    { label: "Authentication Provider", value: stack?.authentication },
+    { label: "Cloud / Hosting Provider", value: stack?.cloud },
+    { label: "Object Storage Service", value: stack?.storage },
+    { label: "AI Services & Models", value: stack?.ai_services },
+  ];
+
+  const componentCards = components.map((c: any) => {
+    return `<article class="info-card">
+      <h3>${escapeHtml(c?.component || "Component")}</h3>
+      <p>${escapeHtml(c?.purpose || "System module.")}</p>
+    </article>`;
+  }).join("");
+
+  const body = [
+    renderSection("Recommended Technology Stack", renderFieldGrid(stackFields)),
+    renderSection(
+      "System Components & Infrastructure",
+      `<div class="card-grid">${componentCards || '<p class="muted">No system components listed.</p>'}</div>`
+    ),
+    renderSection(
+      "API Modules & Database Entities",
+      `<div class="card-grid">
+        ${renderInfoCard("Core API Modules", undefined, asStringArray(arch?.api_modules))}
+        ${renderInfoCard("Database Schema Entities", undefined, asStringArray(arch?.database_entities))}
+      </div>`
+    ),
+    renderSection(
+      "Security, Privacy & Compliance",
+      `<div class="card-grid">
+        ${renderInfoCard("Security Policies", undefined, asStringArray(security?.security_requirements), "strong")}
+        ${renderInfoCard("Privacy Policies", undefined, asStringArray(security?.privacy_requirements), "medium")}
+        ${renderInfoCard("Compliance Standards", undefined, asStringArray(security?.compliance_requirements), "caution")}
+      </div>`
+    )
+  ].join("");
+
+  return renderPdf(baseHtml({
+    title,
+    subtitle: "CTO-ready technical specification, including data models and stack components.",
+    eyebrow: "DEHIX Technical Specification",
+    theme: { brand: "#475569", brandDark: "#1e293b" }
+  }, body));
+}
+
+export async function buildFreelancerHiringBriefPdf(title: string, blueprint: any): Promise<Buffer> {
+  const team = blueprint?.team_requirements ?? {};
+  const recommended = Array.isArray(team?.recommended_team) ? team.recommended_team : [];
+
+  const roleCards = recommended.map((r: any) => {
+    return `<article class="info-card">
+      <h3>${escapeHtml(r?.role || "Team Role")}</h3>
+      <p><strong>Responsibilities:</strong></p>
+      ${renderList(asStringArray(r?.responsibilities))}
+    </article>`;
+  }).join("");
+
+  const body = [
+    renderSection(
+      "Recommended Development Squad",
+      `<div class="card-grid">${roleCards || '<p class="muted">No roles specified.</p>'}</div>`
+    ),
+    renderSection(
+      "Minimum Viable Team Requirements",
+      `<article class="info-card strong">
+        <h3>Core Personnel</h3>
+        ${renderList(asStringArray(team?.minimum_team))}
+      </article>`
+    ),
+    renderSection(
+      "Escrow Match Guidelines",
+      `<p>All roles are integrated with the DEHIX reputation matching algorithm, validating developer Web3 credentials (SBTs) and github open source history before matching room assignment.</p>`
+    )
+  ].join("");
+
+  return renderPdf(baseHtml({
+    title,
+    subtitle: "Recommended team composition, roles, and developer credentials required.",
+    eyebrow: "DEHIX Squad Hiring Brief",
+    theme: { brand: "#4f46e5", brandDark: "#3730a3" }
+  }, body));
+}
+
+export async function buildRoadmapBudgetPdf(title: string, blueprint: any): Promise<Buffer> {
+  const road = blueprint?.development_roadmap ?? {};
+  const cost = blueprint?.cost_estimation ?? {};
+  const biz = blueprint?.business_model ?? {};
+  const gtm = blueprint?.go_to_market ?? {};
+
+  const budget = cost?.mvp_budget ?? {};
+  const operational = cost?.monthly_operational_cost ?? {};
+
+  const budgetFields = [
+    { label: "MVP Cost (Minimum)", value: budget?.minimum },
+    { label: "MVP Cost (Expected)", value: budget?.expected },
+    { label: "MVP Cost (High End)", value: budget?.high_end },
+    { label: "Monthly Ops (Minimum)", value: operational?.minimum },
+    { label: "Monthly Ops (Expected)", value: operational?.expected },
+    { label: "Monthly Ops (High End)", value: operational?.high_end },
+  ];
+
+  const roadmapPhases = [
+    { label: "Phase 1: Research & Discovery", val: road?.phase_1_discovery },
+    { label: "Phase 2: Design & Prototyping", val: road?.phase_2_design },
+    { label: "Phase 3: MVP Development", val: road?.phase_3_mvp_development },
+    { label: "Phase 4: Testing & QA", val: road?.phase_4_testing },
+    { label: "Phase 5: Launch & Post-Launch", val: road?.phase_5_launch },
+  ];
+
+  const roadmapCards = roadmapPhases.map((phase) => {
+    if (!phase.val) return "";
+    return `<article class="info-card">
+      <h3>${escapeHtml(phase.label)} (${escapeHtml(phase.val.duration || "N/A")})</h3>
+      <p><strong>Deliverables:</strong></p>
+      ${renderList(asStringArray(phase.val.deliverables))}
+    </article>`;
+  }).join("");
+
+  const body = [
+    renderSection("Budget & Operation Cost Estimation", renderFieldGrid(budgetFields)),
+    renderSection(
+      "Major Cost Drivers",
+      `<div class="nested-block">
+        ${renderList(asStringArray(cost?.major_cost_drivers))}
+      </div>`
+    ),
+    renderSection(
+      "Phased Development Timeline",
+      `<div class="card-grid">${roadmapCards || '<p class="muted">Roadmap phases not available.</p>'}</div>`
+    ),
+    renderSection(
+      "Business Model & Market Entry",
+      `<div class="card-grid">
+        ${renderInfoCard("Primary Revenue Streams", undefined, asStringArray(biz?.primary_revenue_streams), "strong")}
+        ${renderInfoCard("Go-To-Market Strategy", undefined, asStringArray(gtm?.customer_acquisition_strategy), "medium")}
+      </div>`
+    )
+  ].join("");
+
+  return renderPdf(baseHtml({
+    title,
+    subtitle: "Projected investment ranges, development timeline, and operational runway.",
+    eyebrow: "DEHIX Delivery Roadmap & Budget",
+    theme: { brand: "#d97706", brandDark: "#92400e" }
+  }, body));
+}
+
