@@ -390,9 +390,15 @@ export default function LiveRoom() {
 
   useEffect(() => {
     if (!roomId || !user) return;
-    const socket = io(window.location.origin, { transports: ["websocket", "polling"] });
+    const token = localStorage.getItem("dehix_token");
+    const socket = io(window.location.origin, {
+      auth: { token },
+      transports: ["websocket", "polling"],
+    });
     socketRef.current = socket;
-    socket.emit("room:join", { roomId, userId: user._id });
+    socket.emit("room:join", { roomId });
+    socket.on("connect_error", () => toast.error("Realtime connection failed. Please sign in again."));
+    socket.on("room:error", ({ error }: { error: string }) => toast.error(error));
     socket.on("room:participant_joined", () => queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }));
     socket.on("room:participant_invited", () => { queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }); toast.info("A new talent was invited to this room"); });
     socket.on("room:ticket_updated", () => refetchTickets());
@@ -694,13 +700,15 @@ export default function LiveRoom() {
         body: JSON.stringify({ roomId }),
       });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error ?? "Failed"); }
-      const suggestions: Array<{ title: string; estimatedHours?: number; milestoneNumber?: number }> = await res.json();
+      const suggestions: Array<{ title: string; description?: string; roleTitle?: string; estimatedHours?: number; milestoneNumber?: number }> = await res.json();
       for (const s of suggestions) {
         await fetch(`/api/rooms/${roomId}/tickets`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({
             title: s.title,
+            description: s.description ?? undefined,
+            assignedRole: s.roleTitle ?? undefined,
             estimatedHours: s.estimatedHours ?? undefined,
             milestoneNumber: s.milestoneNumber ?? 1,
           }),

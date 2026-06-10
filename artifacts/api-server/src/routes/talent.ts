@@ -223,8 +223,8 @@ router.post("/respond-invite", requireAuth, async (req: AuthRequest, res) => {
   const { participantId, action } = parsed.data;
   try {
     const newStatus = action === "accept" ? "joined" : "declined";
-    const participant = await RoomParticipant.findByIdAndUpdate(
-      participantId,
+    const participant = await RoomParticipant.findOneAndUpdate(
+      { _id: participantId, userId: req.userId },
       { status: newStatus },
       { new: true }
     );

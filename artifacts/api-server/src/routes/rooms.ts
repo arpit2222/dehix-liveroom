@@ -32,6 +32,7 @@ import { AiChatMessage } from "../models/AiChatMessage.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
 import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled } from "../lib/openai.js";
 import { TECH_MANDATORY_QUESTIONS } from "../lib/launchQuestions.js";
+import { requireRoomAccess, requireRoomOwner } from "../lib/roomAccess.js";
 
 const router = Router();
 
@@ -62,6 +63,11 @@ async function findLaunchSessionForRoom(room: InstanceType<typeof LiveRoom>) {
 }
 
 router.post("/", requireAuth, async (req: AuthRequest, res) => {
+  if (req.userRole !== "business") {
+    res.status(403).json({ error: "Only business accounts can create rooms" });
+    return;
+  }
+
   const parsed = CreateRoomBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input" });
@@ -148,9 +154,65 @@ router.get("/my", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/:id/activity", requireAuth, async (req: AuthRequest, res) => {
+router.get("/:id/activity", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const roomId = req.params["id"];
+    const storedActivities = await RoomActivity.find({ roomId }).sort({ createdAt: -1 }).limit(50);
+    if (storedActivities.length > 0) {
+      const labelForActivity = (activity: InstanceType<typeof RoomActivity>) => {
+        const title = typeof activity.meta?.title === "string" ? activity.meta.title : "";
+        switch (activity.type) {
+          case "room_created":
+            return title ? `Room created: ${title}` : "Room created";
+          case "brief_generated":
+            return "AI brief generated from launch context";
+          case "nda_generated":
+            return "NDA generated from room context";
+          case "nda_signed":
+            return activity.meta?.fullyExecuted ? "NDA fully signed" : "NDA signature recorded";
+          case "milestone_created":
+            return title ? `Milestone added: ${title}` : "Milestone added";
+          case "milestone_released":
+            return title ? `Milestone released: ${title}` : "Milestone released";
+          case "ticket_created":
+            return title ? `Ticket created: ${title}` : "Ticket created";
+          case "participant_joined":
+            return "Participant joined";
+          case "participant_invited":
+            return "Participant invited";
+          case "participant_removed":
+            return "Participant removed";
+          case "notes_updated":
+            return "Room notes updated";
+          case "room_contracted":
+            return "Room contracted";
+          case "room_closed":
+            return "Room closed";
+          default:
+            return activity.type.replace(/_/g, " ");
+        }
+      };
+      const iconForActivity = (type: string) => {
+        if (type.includes("ticket")) return "T";
+        if (type.includes("milestone")) return "M";
+        if (type.includes("nda")) return "N";
+        if (type.includes("brief")) return "B";
+        if (type.includes("participant")) return "P";
+        return "*";
+      };
+      res.json(storedActivities.map((activity) => ({
+        _id: activity._id,
+        type: activity.type,
+        label: labelForActivity(activity),
+        at: activity.createdAt,
+        createdAt: activity.createdAt,
+        icon: iconForActivity(activity.type),
+        actorId: activity.actorId ?? null,
+        actorName: activity.actorName ?? null,
+        meta: activity.meta ?? {},
+      })));
+      return;
+    }
     const [participants, tickets, milestones, nda] = await Promise.all([
       RoomParticipant.find({ roomId }).populate("userId", "name email").sort({ joinedAt: -1 }).limit(10),
       Ticket.find({ roomId }).sort({ createdAt: -1 }).limit(10),
@@ -199,7 +261,7 @@ router.get("/:id/activity", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
+router.get("/:id", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
     if (!room) {
@@ -227,7 +289,7 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/:id/participants", requireAuth, async (req: AuthRequest, res) => {
+router.get("/:id/participants", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const participants = await RoomParticipant.find({ roomId: req.params["id"] }).populate(
       "userId",
@@ -240,7 +302,7 @@ router.get("/:id/participants", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/:id/invite", requireAuth, async (req: AuthRequest, res) => {
+router.post("/:id/invite", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   const parsed = InviteTalentBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input" });
@@ -249,6 +311,11 @@ router.post("/:id/invite", requireAuth, async (req: AuthRequest, res) => {
   const { talentId, roleId } = parsed.data;
   try {
     const roomId = String(req.params["id"]);
+    const role = await RoomRole.findOne({ _id: roleId, roomId });
+    if (!role) {
+      res.status(400).json({ error: "Role does not belong to this room" });
+      return;
+    }
     const existing = await RoomParticipant.findOne({ roomId, userId: talentId });
     if (existing) {
       res.json({ message: "Already invited" });
@@ -260,7 +327,7 @@ router.post("/:id/invite", requireAuth, async (req: AuthRequest, res) => {
       roleId,
       status: "invited",
     });
-    await RoomRole.findByIdAndUpdate(roleId, { status: "invited" });
+    await RoomRole.findOneAndUpdate({ _id: roleId, roomId }, { status: "invited" });
     const io = getIo();
     if (io) {
       io.to(`talent:${talentId}`).emit("talent:invited", {
@@ -275,7 +342,7 @@ router.post("/:id/invite", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/:id/contract", requireAuth, async (req: AuthRequest, res) => {
+router.post("/:id/contract", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findByIdAndUpdate(
       req.params["id"],
@@ -293,7 +360,7 @@ router.post("/:id/contract", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/:id/assemble", requireAuth, async (req: AuthRequest, res) => {
+router.post("/:id/assemble", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findByIdAndUpdate(
       req.params["id"],
@@ -315,7 +382,7 @@ router.post("/:id/assemble", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
+router.post("/:id/close", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   try {
     await LiveRoom.findByIdAndUpdate(req.params["id"], { status: "closed" });
     RoomActivity.create({ roomId: String(req.params["id"]), type: "room_closed", actorId: req.userId }).catch(() => { });
@@ -326,7 +393,7 @@ router.post("/:id/close", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/:id/business-validation.pdf", requireAuth, async (req: AuthRequest, res) => {
+router.get("/:id/business-validation.pdf", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
@@ -349,7 +416,7 @@ router.get("/:id/business-validation.pdf", requireAuth, async (req: AuthRequest,
   }
 });
 
-router.get("/:id/business-blueprint.pdf", requireAuth, async (req: AuthRequest, res) => {
+router.get("/:id/business-blueprint.pdf", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
@@ -556,7 +623,7 @@ async function getOrCreateDocumentPdf(room: any, docType: string, req: AuthReque
   return { filename, buffer };
 }
 
-router.get("/:id/documents-zip", requireAuth, async (req: AuthRequest, res) => {
+router.get("/:id/documents-zip", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
     if (!room) {
@@ -565,7 +632,11 @@ router.get("/:id/documents-zip", requireAuth, async (req: AuthRequest, res) => {
     }
 
     const isOwner = String(room.businessId) === req.userId;
-    const isParticipant = await RoomParticipant.exists({ roomId: room._id, userId: req.userId });
+    const isParticipant = await RoomParticipant.exists({
+      roomId: room._id,
+      userId: req.userId,
+      status: { $in: ["joined", "accepted"] },
+    });
     if (!isOwner && !isParticipant) {
       res.status(403).json({ error: "You do not have access to this room documents" });
       return;
@@ -715,7 +786,7 @@ router.get("/:id/documents-zip", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/:id/export", requireAuth, async (req: AuthRequest, res) => {
+router.get("/:id/export", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
@@ -783,12 +854,19 @@ router.get("/:id/export", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.delete("/:id/participants/:participantId", requireAuth, async (req: AuthRequest, res) => {
+router.delete("/:id/participants/:participantId", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
     if (String(room.businessId) !== req.userId) { res.status(403).json({ error: "Only the room owner can remove participants" }); return; }
-    await RoomParticipant.findByIdAndDelete(req.params["participantId"]);
+    const deleted = await RoomParticipant.findOneAndDelete({
+      _id: req.params["participantId"],
+      roomId: req.params["id"],
+    });
+    if (!deleted) {
+      res.status(404).json({ error: "Participant not found in this room" });
+      return;
+    }
     const io = getIo();
     if (io) io.to(`room:${req.params["id"]}`).emit("room:participant_removed", { roomId: req.params["id"], participantId: req.params["participantId"] });
     RoomActivity.create({ roomId: String(req.params["id"]), type: "participant_removed", actorId: req.userId }).catch(() => { });
@@ -799,7 +877,7 @@ router.delete("/:id/participants/:participantId", requireAuth, async (req: AuthR
   }
 });
 
-router.put("/:id/notes", requireAuth, async (req: AuthRequest, res) => {
+router.put("/:id/notes", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   const { notes } = req.body;
   try {
     const room = await LiveRoom.findByIdAndUpdate(
@@ -817,7 +895,7 @@ router.put("/:id/notes", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.put("/:id/meet-link", requireAuth, async (req: AuthRequest, res) => {
+router.put("/:id/meet-link", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   const { meetLink } = req.body;
   try {
     const room = await LiveRoom.findByIdAndUpdate(
@@ -835,7 +913,7 @@ router.put("/:id/meet-link", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/:id/activity", requireAuth, async (req: AuthRequest, res) => {
+router.get("/:id/activity", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const activities = await RoomActivity.find({ roomId: req.params["id"] })
       .sort({ createdAt: -1 })
@@ -854,7 +932,7 @@ router.get("/:id/activity", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.put("/:id/brief", requireAuth, async (req: AuthRequest, res) => {
+router.put("/:id/brief", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   const { brief } = req.body;
   if (!brief) { res.status(400).json({ error: "brief required" }); return; }
   try {
@@ -872,7 +950,7 @@ router.put("/:id/brief", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.put("/:id/status", requireAuth, async (req: AuthRequest, res) => {
+router.put("/:id/status", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   const allowed = ["scoping", "matching", "open", "assembling", "contracted", "closed"];
   const { status } = req.body;
   if (!allowed.includes(status)) { res.status(400).json({ error: "Invalid status" }); return; }
@@ -888,13 +966,20 @@ router.put("/:id/status", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/:id/participants", requireAuth, async (req: AuthRequest, res) => {
+router.post("/:id/participants", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   const { userId, roleId } = req.body;
   if (!userId) { res.status(400).json({ error: "userId required" }); return; }
   try {
     const roomId = String(req.params["id"]);
     const room = await LiveRoom.findById(roomId);
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
+    if (roleId) {
+      const role = await RoomRole.findOne({ _id: roleId, roomId });
+      if (!role) {
+        res.status(400).json({ error: "Role does not belong to this room" });
+        return;
+      }
+    }
     const existing = await RoomParticipant.findOne({ roomId, userId });
     if (existing) {
       res.status(409).json({ error: "Talent is already in this room" });

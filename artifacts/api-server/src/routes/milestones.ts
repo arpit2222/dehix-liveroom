@@ -2,12 +2,14 @@ import { Router } from "express";
 import { Milestone } from "../models/Milestone.js";
 import { RoomActivity } from "../models/RoomActivity.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
+import { requireRoomAccess, requireRoomOwner } from "../lib/roomAccess.js";
 import { CreateMilestoneBody } from "@workspace/api-zod";
 import { getIo } from "../socket.js";
 
 const router = Router({ mergeParams: true });
+router.use(requireAuth);
 
-router.get("/", requireAuth, async (req: AuthRequest, res) => {
+router.get("/", requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const milestones = await Milestone.find({ roomId: req.params["id"] });
     res.json(milestones.map(formatMilestone));
@@ -16,7 +18,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/", requireAuth, async (req: AuthRequest, res) => {
+router.post("/", requireRoomOwner, async (req: AuthRequest, res) => {
   const parsed = CreateMilestoneBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input" });
@@ -35,10 +37,10 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.put("/:milestoneId/approve", requireAuth, async (req: AuthRequest, res) => {
+router.put("/:milestoneId/approve", requireRoomOwner, async (req: AuthRequest, res) => {
   try {
-    const milestone = await Milestone.findByIdAndUpdate(
-      req.params["milestoneId"],
+    const milestone = await Milestone.findOneAndUpdate(
+      { _id: req.params["milestoneId"], roomId: req.params["id"] },
       { status: "released" },
       { new: true }
     );
@@ -52,10 +54,10 @@ router.put("/:milestoneId/approve", requireAuth, async (req: AuthRequest, res) =
   }
 });
 
-router.put("/:milestoneId/submit", requireAuth, async (req: AuthRequest, res) => {
+router.put("/:milestoneId/submit", requireRoomAccess, async (req: AuthRequest, res) => {
   try {
-    const milestone = await Milestone.findByIdAndUpdate(
-      req.params["milestoneId"],
+    const milestone = await Milestone.findOneAndUpdate(
+      { _id: req.params["milestoneId"], roomId: req.params["id"] },
       { status: "submitted" },
       { new: true }
     );
@@ -68,13 +70,13 @@ router.put("/:milestoneId/submit", requireAuth, async (req: AuthRequest, res) =>
   }
 });
 
-router.put("/:milestoneId/status", requireAuth, async (req: AuthRequest, res) => {
+router.put("/:milestoneId/status", requireRoomOwner, async (req: AuthRequest, res) => {
   const { status } = req.body;
   const allowed = ["pending", "in_progress", "completed", "released"];
   if (!allowed.includes(status)) { res.status(400).json({ error: "Invalid status" }); return; }
   try {
-    const milestone = await Milestone.findByIdAndUpdate(
-      req.params["milestoneId"],
+    const milestone = await Milestone.findOneAndUpdate(
+      { _id: req.params["milestoneId"], roomId: req.params["id"] },
       { status },
       { new: true }
     );

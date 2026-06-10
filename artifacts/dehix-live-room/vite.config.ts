@@ -12,6 +12,10 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 const basePath = process.env.BASE_PATH || "/";
+const allowedHosts = (process.env.VITE_ALLOWED_HOSTS ?? "localhost,127.0.0.1")
+  .split(",")
+  .map((host) => host.trim())
+  .filter(Boolean);
 
 export default defineConfig({
   base: basePath,
@@ -40,13 +44,13 @@ export default defineConfig({
     port,
     strictPort: false,
     host: "0.0.0.0",
-    allowedHosts: true,
+    allowedHosts,
     fs: {
       strict: true,
     },
     proxy: {
       "/api": {
-        target: process.env.VITE_API_URL || "http://localhost:5000",
+        target: process.env.VITE_API_URL || "http://localhost:5001",
         changeOrigin: true,
       },
     },
@@ -54,6 +58,6 @@ export default defineConfig({
   preview: {
     port,
     host: "0.0.0.0",
-    allowedHosts: true,
+    allowedHosts,
   },
 });

@@ -3,11 +3,13 @@ import { Nda } from "../models/Nda.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomActivity } from "../models/RoomActivity.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
+import { requireRoomAccess } from "../lib/roomAccess.js";
 import { getIo } from "../socket.js";
 
 const router = Router({ mergeParams: true });
+router.use(requireAuth, requireRoomAccess);
 
-router.get("/", requireAuth, async (req: AuthRequest, res) => {
+router.get("/", async (req: AuthRequest, res) => {
   try {
     const nda = await Nda.findOne({ roomId: req.params["id"] });
     if (!nda) {
@@ -20,7 +22,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/sign", requireAuth, async (req: AuthRequest, res) => {
+router.post("/sign", async (req: AuthRequest, res) => {
   try {
     const nda = await Nda.findOne({ roomId: req.params["id"] });
     if (!nda) {

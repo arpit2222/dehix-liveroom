@@ -46,6 +46,37 @@ Full-stack real-time AI-powered Web3 hiring platform. A standard npm monorepo wi
    By default, the API runs on `http://localhost:5001` and the frontend runs on `http://localhost:5173`.
    You can also run them separately with `npm run dev:api` and `npm run dev:client`.
 
+## Production Handoff Checklist
+
+Before deploying, set these environment variables on the hosting platform:
+
+- `NODE_ENV=production`
+- `PORT`: API port supplied by the platform.
+- `MONGODB_URI`: Production MongoDB/Atlas connection string.
+- `SESSION_SECRET`: At least 32 random characters. The API refuses to start in production without this.
+- `CORS_ORIGINS` or `CLIENT_ORIGIN`: Exact frontend URL, for example `https://app.example.com`. Use comma-separated values for multiple allowed origins.
+- `VITE_API_URL`: Public API origin used by the frontend build when the API is not served from the same origin.
+- `VITE_ALLOWED_HOSTS`: Comma-separated hostnames allowed by Vite preview/dev, for example `app.example.com`.
+- Azure OpenAI and Firebase values from `.env.example` as needed.
+
+Run these checks before handing a build to production:
+
+```bash
+npm ci
+npm run build
+npm audit --omit=dev
+```
+
+Security hardening included in the backend:
+
+- HTTP security headers via Helmet.
+- API and auth rate limits via `API_RATE_LIMIT` and `AUTH_RATE_LIMIT`.
+- Production CORS allowlist.
+- JWT secret enforcement in production.
+- Room owner/member authorization on room, ticket, milestone, NDA, AI document, and Socket.IO room access paths.
+
+Keep the seeded demo accounts out of production databases. Use `npm run seed` only for local demos or isolated staging data.
+
 ## Azure OpenAI Notes
 
 - Azure OpenAI uses deployment names in API calls. Set `AZURE_OPENAI_DEPLOYMENT` to the deployment name you created in Azure, not just the model family name.
