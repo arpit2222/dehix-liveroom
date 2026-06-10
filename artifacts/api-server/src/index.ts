@@ -3,6 +3,7 @@ import { Server as SocketIOServer } from "socket.io";
 import app from "./app.js";
 import { logger } from "./lib/logger.js";
 import { connectMongoDB } from "./lib/mongodb.js";
+import { isAllowedOrigin } from "./lib/cors.js";
 import { setupSocket } from "./socket.js";
 
 const rawPort = process.env["PORT"];
@@ -21,8 +22,15 @@ const server = createServer(app);
 
 const io = new SocketIOServer(server, {
   cors: {
-    origin: "*",
+    origin(origin, callback) {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`Origin is not allowed by CORS: ${origin}`));
+    },
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
 

@@ -4,6 +4,7 @@ import { Nda } from "../models/Nda.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { UpdateTicketBody } from "@workspace/api-zod";
 import { getIo } from "../socket.js";
+import { userCanAccessRoom } from "../lib/roomAccess.js";
 
 import healthRouter from "./health.js";
 import authRouter from "./auth.js";
@@ -34,6 +35,16 @@ router.put("/tickets/:id", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
   try {
+    const existing = await Ticket.findById(req.params["id"]);
+    if (!existing) {
+      res.status(404).json({ error: "Ticket not found" });
+      return;
+    }
+    if (!(await userCanAccessRoom(String(existing.roomId), req.userId))) {
+      res.status(403).json({ error: "You do not have access to this ticket" });
+      return;
+    }
+
     const ticket = await Ticket.findByIdAndUpdate(req.params["id"], parsed.data, { new: true });
     if (!ticket) {
       res.status(404).json({ error: "Ticket not found" });

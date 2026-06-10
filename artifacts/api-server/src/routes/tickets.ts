@@ -1,12 +1,15 @@
 import { Router } from "express";
 import { Ticket } from "../models/Ticket.js";
+import { RoomActivity } from "../models/RoomActivity.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
+import { requireRoomAccess, userCanAccessRoom } from "../lib/roomAccess.js";
 import { CreateTicketBody, UpdateTicketBody } from "@workspace/api-zod";
 import { getIo } from "../socket.js";
 
 const router = Router({ mergeParams: true });
+router.use(requireAuth, requireRoomAccess);
 
-router.get("/", requireAuth, async (req: AuthRequest, res) => {
+router.get("/", async (req: AuthRequest, res) => {
   try {
     const tickets = await Ticket.find({ roomId: req.params["id"] }).sort({ createdAt: 1 });
     res.json(tickets.map(formatTicket));
@@ -15,7 +18,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/", requireAuth, async (req: AuthRequest, res) => {
+router.post("/", async (req: AuthRequest, res) => {
   const parsed = CreateTicketBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input" });
@@ -27,6 +30,12 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     if (io) {
       io.to(`room:${req.params["id"]}`).emit("room:ticket_updated", formatTicket(ticket));
     }
+    RoomActivity.create({
+      roomId: String(req.params["id"]),
+      type: "ticket_created",
+      actorId: req.userId,
+      meta: { title: ticket.title, milestoneNumber: ticket.milestoneNumber },
+    }).catch(() => {});
     res.status(201).json(formatTicket(ticket));
   } catch (err) {
     res.status(500).json({ error: "Failed to create ticket" });
@@ -41,6 +50,16 @@ export function setupTicketUpdate(router: Router) {
       return;
     }
     try {
+      const existing = await Ticket.findById(req.params["ticketId"]);
+      if (!existing) {
+        res.status(404).json({ error: "Ticket not found" });
+        return;
+      }
+      if (!(await userCanAccessRoom(String(existing.roomId), req.userId))) {
+        res.status(403).json({ error: "You do not have access to this ticket" });
+        return;
+      }
+
       const ticket = await Ticket.findByIdAndUpdate(
         req.params["ticketId"],
         parsed.data,

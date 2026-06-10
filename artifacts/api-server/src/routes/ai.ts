@@ -15,6 +15,7 @@ import { LaunchClarification } from "../models/LaunchClarification.js";
 import { AiChatMessage } from "../models/AiChatMessage.js";
 import { TECH_MANDATORY_QUESTIONS } from "../lib/launchQuestions.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
+import { userCanAccessRoom } from "../lib/roomAccess.js";
 import { ScopeProjectBody, MatchTalentBody, GenerateNdaBody, SuggestMilestonesBody, AiChatBody } from "@workspace/api-zod";
 
 const router = Router();
@@ -55,6 +56,52 @@ function safeJson(value: unknown, maxLength = 6000): string {
   return `${text.slice(0, maxLength)}\n...[trimmed for AI context]`;
 }
 
+function textFromUnknown(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (["string", "number", "boolean"].includes(typeof value)) return String(value);
+  if (Array.isArray(value)) return value.map(textFromUnknown).join(" ");
+  if (typeof value === "object") return Object.values(value as Record<string, unknown>).map(textFromUnknown).join(" ");
+  return "";
+}
+
+function parseMoneyValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "object" && value !== null) {
+    const obj = value as Record<string, unknown>;
+    for (const key of ["expected", "high_end", "minimum", "max", "budget", "mvp_budget", "suggestedTotalBudgetUsd", "talentRecommendationBudgetUsd"]) {
+      const parsed = parseMoneyValue(obj[key]);
+      if (parsed) return parsed;
+    }
+    return parseMoneyValue(textFromUnknown(value));
+  }
+  if (typeof value !== "string") return undefined;
+
+  const normalized = value.toLowerCase().replace(/,/g, "");
+  const matches = [...normalized.matchAll(/(\d+(?:\.\d+)?)\s*(k|m|lakh|lac)?/g)];
+  const amounts = matches
+    .map((match) => {
+      const raw = Number(match[1]);
+      if (!Number.isFinite(raw)) return 0;
+      const suffix = match[2];
+      if (suffix === "k") return raw * 1000;
+      if (suffix === "m") return raw * 1000000;
+      if (suffix === "lakh" || suffix === "lac") return raw * 100000;
+      return raw;
+    })
+    .filter((amount) => amount >= 100);
+
+  return amounts.length > 0 ? Math.max(...amounts) : undefined;
+}
+
+function parseJsonObject(text: string | undefined): any | null {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 async function resolveChatThread(req: AuthRequest, res: Response): Promise<ChatThreadContext | null> {
   const roomId = typeof req.body.roomId === "string" ? req.body.roomId : typeof req.query.roomId === "string" ? req.query.roomId : "";
   const launchSessionId =
@@ -72,7 +119,11 @@ async function resolveChatThread(req: AuthRequest, res: Response): Promise<ChatT
     }
 
     const isOwner = String(room.businessId) === req.userId;
-    const isParticipant = await RoomParticipant.exists({ roomId: room._id, userId: req.userId });
+    const isParticipant = await RoomParticipant.exists({
+      roomId: room._id,
+      userId: req.userId,
+      status: { $in: ["joined", "accepted"] },
+    });
     if (!isOwner && !isParticipant) {
       res.status(403).json({ error: "You do not have access to this room chat" });
       return null;
@@ -196,6 +247,102 @@ function formatStoredConversation(messages: Array<{ role: string; userName: stri
   return `${fullText.slice(-maxLength)}\n\n[Earlier conversation exists in database but was trimmed from this request because of model context limits.]`;
 }
 
+function originalIdeaFromRoom(room: InstanceType<typeof LiveRoom>): string | undefined {
+  const match = room.rawDescription.match(/^Original Idea:\n([\s\S]*?)(?:\n\nBusiness Validation:|$)/);
+  return match?.[1]?.trim();
+}
+
+async function findLaunchSessionForRoom(room: InstanceType<typeof LiveRoom>) {
+  if (room.launchSessionId) {
+    const session = await LaunchSession.findOne({ _id: room.launchSessionId, userId: room.businessId });
+    if (session) return session;
+  }
+
+  const brief = room.aiScopedBrief as any;
+  if (brief?.launchSessionId) {
+    const session = await LaunchSession.findOne({ _id: brief.launchSessionId, userId: room.businessId });
+    if (session) return session;
+  }
+
+  const rawIdea = originalIdeaFromRoom(room);
+  if (!rawIdea) return null;
+  return LaunchSession.findOne({ userId: room.businessId, rawIdea }).sort({ createdAt: -1 });
+}
+
+function extractBudgetUsdFromBlueprint(blueprint: any): number | undefined {
+  return parseMoneyValue(blueprint?.cost_estimation?.mvp_budget)
+    ?? parseMoneyValue(blueprint?.cost_estimation)
+    ?? parseMoneyValue(blueprint?.budget)
+    ?? undefined;
+}
+
+async function resolveRoomBudgetUsd(room: InstanceType<typeof LiveRoom>): Promise<number | undefined> {
+  const brief = room.aiScopedBrief as any;
+  const briefBudget = extractBudgetUsdFromBlueprint(brief?.businessBlueprint)
+    ?? parseMoneyValue(brief?.talentRecommendationBudgetUsd)
+    ?? parseMoneyValue(brief?.suggestedTotalBudgetUsd);
+  if (briefBudget) return briefBudget;
+
+  const launchSession = await findLaunchSessionForRoom(room);
+  const blueprint = parseJsonObject(launchSession?.technicalDocText);
+  const recommendation = parseJsonObject(launchSession?.businessDocText);
+  return extractBudgetUsdFromBlueprint(blueprint)
+    ?? parseMoneyValue(recommendation?.budgetUsd)
+    ?? parseMoneyValue(launchSession?.budgetRange);
+}
+
+function rebalanceMilestoneAmounts<T extends { amountUsd?: unknown }>(milestones: T[], totalBudgetUsd: number | undefined): T[] {
+  if (!totalBudgetUsd || totalBudgetUsd <= 0 || milestones.length === 0) return milestones;
+
+  const currentTotal = milestones.reduce((sum, milestone) => {
+    const amount = Number(milestone.amountUsd);
+    return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+  }, 0);
+
+  let remaining = Math.round(totalBudgetUsd);
+  return milestones.map((milestone, index) => {
+    const isLast = index === milestones.length - 1;
+    const nextAmount = isLast
+      ? remaining
+      : currentTotal > 0
+        ? Math.round((Number(milestone.amountUsd) || 0) / currentTotal * totalBudgetUsd)
+        : Math.round(totalBudgetUsd / milestones.length);
+    remaining -= nextAmount;
+    return { ...milestone, amountUsd: Math.max(0, nextAmount) };
+  });
+}
+
+async function ensureRoomAccess(req: AuthRequest, res: Response, room: InstanceType<typeof LiveRoom>): Promise<boolean> {
+  const isOwner = String(room.businessId) === req.userId;
+  const isParticipant = await RoomParticipant.exists({
+    roomId: room._id,
+    userId: req.userId,
+    status: { $in: ["joined", "accepted"] },
+  });
+  if (!isOwner && !isParticipant) {
+    res.status(403).json({ error: "You do not have access to this room" });
+    return false;
+  }
+  return true;
+}
+
+async function buildRoomGenerationContext(room: InstanceType<typeof LiveRoom>): Promise<string> {
+  const launchSession = await findLaunchSessionForRoom(room);
+  const threadId = launchSession ? `launch:${String(launchSession._id)}` : `room:${String(room._id)}`;
+  const storedMessages = await AiChatMessage.find({ threadId }).sort({ createdAt: 1 });
+  const launchContext = await buildLaunchContext(launchSession);
+  const roomContext = await buildRoomContext(room);
+  const savedConversation = formatStoredConversation(storedMessages, 10000);
+
+  return [
+    "Use this complete context as the source of truth for generation.",
+    "Priority order when details conflict: latest saved conversation and room notes, technical intake answers, Phase 2 blueprint, Phase 1 validation, original idea.",
+    `Launch context:\n${launchContext}`,
+    `Live room context:\n${roomContext}`,
+    `Previous phase and room AI discussion:\n${savedConversation}`,
+  ].join("\n\n");
+}
+
 router.post("/scope", requireAuth, async (req: AuthRequest, res) => {
   const parsed = ScopeProjectBody.safeParse(req.body);
   if (!parsed.success) {
@@ -203,15 +350,35 @@ router.post("/scope", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
   const { description } = parsed.data;
+  const roomId = typeof req.body.roomId === "string" ? req.body.roomId : "";
 
   if (!requireAzureOpenAi(res)) {
     return;
   }
 
   try {
+    let generationContext = "No previous phase or room discussion context was linked to this request.";
+    if (roomId) {
+      const room = await LiveRoom.findById(roomId);
+      if (!room) {
+        res.status(404).json({ error: "Room not found" });
+        return;
+      }
+      if (!(await ensureRoomAccess(req, res, room))) return;
+      generationContext = await buildRoomGenerationContext(room);
+    }
+
     const prompt = `You are a senior Web3 project manager. A client has described a project. Extract and return ONLY valid JSON — no markdown, no explanation.
 
 Client description: ${description}
+
+Previous phase and room discussion context:
+${generationContext}
+
+Instructions:
+- Build the brief from the previous phase context, saved technical intake, and discussion history.
+- Do not create generic milestones or tickets when specific requirements exist in the context.
+- If the client description is less detailed than the context, prefer the context.
 
 Return this exact JSON structure:
 {
@@ -338,12 +505,14 @@ router.post("/generate-nda", requireAuth, async (req: AuthRequest, res) => {
       res.status(404).json({ error: "Room not found" });
       return;
     }
+    if (!(await ensureRoomAccess(req, res, room))) return;
     const business = await User.findById(room.businessId);
     const participants = await RoomParticipant.find({ roomId, status: { $in: ["joined", "accepted"] } })
       .populate("userId", "name email");
     const talentNames = participants.map((p: any) => p.userId?.name ?? "Unknown").join(", ");
     const milestones = await Milestone.find({ roomId });
-    const milestoneList = milestones.map((m) => `• ${m.title}`).join("\n  ");
+    const milestoneList = milestones.map((m) => `- ${m.title}: ${m.description ?? "No description"}${m.amountUsd ? ` ($${m.amountUsd})` : ""}`).join("\n");
+    const generationContext = await buildRoomGenerationContext(room);
 
     const saveNda = async (content: string) => {
       return Nda.findOneAndUpdate(
@@ -373,8 +542,17 @@ Details:
 Business: ${business?.name ?? "Business"}
 Talent: ${talentNames || "TBD"}
 Project: ${room.title}
-Milestones: ${milestones.map((m) => m.title).join(", ")}
-Date: ${new Date().toLocaleDateString()}`;
+Milestones:
+${milestoneList || "No milestones created yet."}
+Date: ${new Date().toLocaleDateString()}
+
+Previous phase and room discussion context:
+${generationContext}
+
+Grounding instructions:
+- Base the scope, deliverables, confidentiality subject matter, IP handoff, and payment schedule on the previous phase context and room discussion.
+- Mention project-specific confidential materials and deliverables instead of generic Web3 wording.
+- Keep legal terms concise but complete.`;
 
     const completion = await azureOpenai.chat.completions.create({
       model: azureOpenAiDeployment,
@@ -397,7 +575,7 @@ router.post("/suggest-milestones", requireAuth, async (req: AuthRequest, res) =>
     res.status(400).json({ error: "Invalid input" });
     return;
   }
-  const { roomId, totalBudgetUsd = 50000 } = parsed.data;
+  const { roomId, totalBudgetUsd } = parsed.data;
 
   if (!requireAzureOpenAi(res)) {
     return;
@@ -409,14 +587,30 @@ router.post("/suggest-milestones", requireAuth, async (req: AuthRequest, res) =>
       res.status(404).json({ error: "Room not found" });
       return;
     }
+    if (!(await ensureRoomAccess(req, res, room))) return;
     const brief = room.aiScopedBrief as any;
+    const generationContext = await buildRoomGenerationContext(room);
+    const resolvedBudgetUsd = totalBudgetUsd ?? await resolveRoomBudgetUsd(room);
+    const budgetLine = resolvedBudgetUsd
+      ? `$${Math.round(resolvedBudgetUsd).toLocaleString()}`
+      : "Not explicitly specified. Infer a realistic escrow budget from the Phase 2 blueprint and scope.";
 
     const prompt = `You are a Web3 project manager. Given this project, suggest 3-4 milestones with escrow amounts.
 Return ONLY valid JSON array, no markdown.
 
 Project: ${room.title}
 Summary: ${brief?.projectSummary ?? room.rawDescription}
-Total Budget: $${totalBudgetUsd}
+Total Budget / escrow cap: ${budgetLine}
+
+Previous phase and room discussion context:
+${generationContext}
+
+Instructions:
+- Use Phase 1 validation, Phase 2 blueprint, mandatory technical answers, room notes, and saved AI discussion to decide milestone scope.
+- Milestones must reflect the actual agreed product phases and constraints, not generic discovery/build/test labels.
+- Include concrete deliverables in each description.
+- If a numeric Total Budget / escrow cap is provided, all amountUsd values must add up exactly to that budget.
+- Do not default to $50,000. Use the budget from the context or infer from the blueprint when missing.
 
 Return array of: [{ "title": string, "description": string, "amountUsd": number, "dueDate": "YYYY-MM-DD" }]`;
 
@@ -428,7 +622,7 @@ Return array of: [{ "title": string, "description": string, "amountUsd": number,
 
     const content = completion.choices[0]?.message?.content ?? "[]";
     const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
-    const suggestions = JSON.parse(cleaned);
+    const suggestions = rebalanceMilestoneAmounts(JSON.parse(cleaned), resolvedBudgetUsd);
     res.json(suggestions);
   } catch (err) {
     sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to suggest milestones");
@@ -582,6 +776,11 @@ router.post("/chat-legacy", requireAuth, async (req: AuthRequest, res) => {
 
   try {
     const room = await LiveRoom.findById(roomId);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    if (!(await ensureRoomAccess(req, res, room))) return;
     const brief = room?.aiScopedBrief as any;
 
     const systemPrompt = `You are the DEHIX Live Room AI — an expert research assistant for Web3 product development.
@@ -629,18 +828,29 @@ router.post("/suggest-tickets", requireAuth, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(roomId);
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
+    if (!(await ensureRoomAccess(req, res, room))) return;
     const brief = room.aiScopedBrief as any;
 
     if (!requireAzureOpenAi(res)) {
       return;
     }
 
+    const generationContext = await buildRoomGenerationContext(room);
     const prompt = `You are a Web3 engineering lead. Given this project, generate 6-10 actionable development tickets.
 Return ONLY valid JSON array, no markdown.
 
 Project: ${room.title}
 Summary: ${brief?.projectSummary ?? room.rawDescription}
 Complexity: ${brief?.complexity ?? "high"}
+
+Previous phase and room discussion context:
+${generationContext}
+
+Instructions:
+- Derive tickets from the actual validated idea, blueprint, technical answers, room notes, and previous AI discussion.
+- Make tickets implementation-ready with precise acceptance-oriented descriptions.
+- Align milestoneNumber with the milestone plan already present in context when available.
+- Avoid generic setup tickets unless setup was specifically required by the previous phases.
 
 Return array of: [{ "title": string (concise action), "description": string (1 sentence), "estimatedHours": number, "milestoneNumber": 1|2|3 }]`;
 
@@ -684,6 +894,16 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
   if (!documentType || !DOC_TYPE_LABELS[documentType]) {
     res.status(400).json({ error: `documentType must be one of: ${Object.keys(DOC_TYPE_LABELS).join(", ")}` });
     return;
+  }
+
+  let room: InstanceType<typeof LiveRoom> | null = null;
+  if (typeof roomId === "string" && roomId.trim()) {
+    room = await LiveRoom.findById(roomId);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    if (!(await ensureRoomAccess(req, res, room))) return;
   }
 
   const convMsgs: ConvMsg[] = messages.map((m: any) => ({
@@ -761,6 +981,11 @@ router.post("/chat-summary", requireAuth, async (req: AuthRequest, res) => {
   }
   try {
     const room = roomId ? await LiveRoom.findById(roomId).catch(() => null) : null;
+    if (roomId && !room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    if (room && !(await ensureRoomAccess(req, res, room))) return;
     const conversation = (messages as any[])
       .slice(-40)
       .map((m: any) => `${m.isAi ? "AI" : m.userName}: ${m.message}`)
@@ -808,9 +1033,7 @@ router.get("/documents/:id/pdf", requireAuth, async (req: AuthRequest, res) => {
     if (doc.roomId) {
       const room = await LiveRoom.findById(doc.roomId);
       if (room) {
-        const isOwner = String(room.businessId) === req.userId;
-        const isParticipant = await RoomParticipant.exists({ roomId: room._id, userId: req.userId });
-        if (!isOwner && !isParticipant) {
+        if (!(await userCanAccessRoom(String(room._id), req.userId))) {
           res.status(403).json({ error: "You do not have access to this document" });
           return;
         }

@@ -1,6 +1,13 @@
 import jwt from "jsonwebtoken";
 
-const SECRET = process.env["SESSION_SECRET"] ?? "dehix-secret-fallback";
+const isProduction = process.env["NODE_ENV"] === "production";
+const configuredSecret = process.env["SESSION_SECRET"];
+
+if (isProduction && (!configuredSecret || configuredSecret.length < 32)) {
+  throw new Error("SESSION_SECRET must be set to at least 32 characters in production.");
+}
+
+const SECRET = configuredSecret ?? "dev-only-change-me-session-secret";
 
 export interface JwtPayload {
   userId: string;
