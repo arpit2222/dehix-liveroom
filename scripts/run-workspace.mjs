@@ -6,6 +6,7 @@ const target = process.argv[2];
 const rootDir = path.resolve(import.meta.dirname, "..");
 const npmCommand = process.env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
 const npmArgPrefix = process.env.npm_execpath ? [process.env.npm_execpath] : [];
+const useShell = process.platform === "win32" && !process.env.npm_execpath;
 
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -84,6 +85,7 @@ const child = spawn(npmCommand, config.args, {
   cwd: rootDir,
   env: config.env,
   stdio: "inherit",
+  shell: useShell,
 });
 
 child.on("error", (err) => {

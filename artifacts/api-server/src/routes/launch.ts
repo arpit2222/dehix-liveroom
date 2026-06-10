@@ -1,43 +1,21 @@
 import { Router, type Response } from "express";
 import mongoose from "mongoose";
 import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled, missingAzureOpenAiEnvVars } from "../lib/openai.js";
-import { buildSimplePdf } from "../lib/simplePdf.js";
+import {
+  getOrCreateBusinessBlueprintPdf,
+  getOrCreateBusinessValidationPdf,
+  warmBusinessBlueprintPdf,
+  warmBusinessValidationPdf,
+} from "../lib/reportPdfCache.js";
+import { TECH_MANDATORY_QUESTIONS, getMandatoryQuestion } from "../lib/launchQuestions.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { LaunchSession } from "../models/LaunchSession.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { SbtCredential } from "../models/SbtCredential.js";
-import { CreateLaunchSessionBody, ScopeLaunchSessionBody } from "@workspace/api-zod";
+import { ConfirmPhase1OutputBody, CreateLaunchSessionBody, ScopeLaunchSessionBody } from "@workspace/api-zod";
 
 const router = Router();
-
-const TECH_MANDATORY_QUESTIONS = [
-  {
-    _id: "primary_user_goal",
-    question: "Who will use this product first, and what is the main thing they should be able to do on day one?",
-    required: true,
-  },
-  {
-    _id: "first_platform",
-    question: "Where should the first version launch: web app, mobile app, admin dashboard, API, or something else?",
-    required: true,
-  },
-  {
-    _id: "must_have_features",
-    question: "What are the top 3 must-have features for the first usable version?",
-    required: true,
-  },
-  {
-    _id: "accounts_payments_data",
-    question: "Will the product need user accounts, payments, file uploads, chat, maps, AI, blockchain, or third-party integrations?",
-    required: true,
-  },
-  {
-    _id: "constraints",
-    question: "Do you have any fixed timeline, budget range, compliance needs, or existing tools/data that the team must work with?",
-    required: true,
-  },
-];
 
 function requireAzureOpenAi(res: Response): boolean {
   if (isAzureOpenAiEnabled) {
@@ -64,12 +42,76 @@ function parseAzureJson<T>(content: string): T {
   return JSON.parse(cleanJsonContent(content)) as T;
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : "Unknown error";
+}
+
+function parseStoredJson<T>(value?: string): T | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : [];
 }
 
-function getMandatoryQuestion(questionId: string) {
-  return TECH_MANDATORY_QUESTIONS.find((question) => question._id === questionId);
+function firstNonEmpty(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function ensureDefaultRegion(analysis: any): any {
+  if (!analysis || typeof analysis !== "object") {
+    return { region_used: "India" };
+  }
+  analysis.region_used = firstNonEmpty(analysis.region_used) ?? "India";
+  return analysis;
+}
+
+function mergeBusinessConfirmedPhase1(analysis: any, input: unknown): any {
+  const existing = ensureDefaultRegion(analysis && typeof analysis === "object" ? analysis : {});
+  const research = existing.research_analysis && typeof existing.research_analysis === "object"
+    ? existing.research_analysis
+    : {};
+  existing.research_analysis = research;
+
+  const parsed = ConfirmPhase1OutputBody.parse(input);
+  const region = firstNonEmpty(parsed.region, existing.region_used) ?? "India";
+  const ideaSummary = firstNonEmpty(parsed.ideaSummary, existing.idea_summary);
+  const targetAudience = firstNonEmpty(parsed.targetAudience, research.target_audience);
+  const businessModel = firstNonEmpty(parsed.businessModel, research.revenue_model);
+  const competitors = firstNonEmpty(parsed.competitors, research.competitor_analysis);
+  const marketDemand = firstNonEmpty(parsed.marketDemand, research.market_demand);
+  const goToMarket = firstNonEmpty(parsed.goToMarket, research.go_to_market_strategy);
+
+  existing.region_used = region;
+  if (ideaSummary) existing.idea_summary = ideaSummary;
+  if (targetAudience) research.target_audience = targetAudience;
+  if (businessModel) research.revenue_model = businessModel;
+  if (competitors) research.competitor_analysis = competitors;
+  if (marketDemand) research.market_demand = marketDemand;
+  if (goToMarket) research.go_to_market_strategy = goToMarket;
+
+  existing.business_confirmed_inputs = {
+    region,
+    idea_summary: ideaSummary ?? "",
+    target_audience: targetAudience ?? "",
+    business_model: businessModel ?? "",
+    competitor_context: competitors ?? "",
+    market_demand: marketDemand ?? "",
+    go_to_market_strategy: goToMarket ?? "",
+    confirmed_at: new Date().toISOString(),
+  };
+
+  return existing;
 }
 
 function formatBusinessValidationLines(analysis: any): Array<{ text: string; size?: number; gapAfter?: number }> {
@@ -483,6 +525,19 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   }
 
   try {
+    const session = await LaunchSession.create({
+      userId: req.userId,
+      rawIdea,
+      projectTitle: projectTitle || rawIdea.slice(0, 90),
+      status: "generating",
+      phase1Status: "generating",
+      phase2Status: "queued",
+    });
+
+    res.status(202).json({ session, phase1Status: "generating" });
+
+    void (async () => {
+      try {
     const prompt = `You are DEHIX_Idea_Analysis_JSON_Prompt.
 
 Purpose:
@@ -503,6 +558,7 @@ Workflow:
 Rules:
 - Ask clarification questions only when the idea is vague.
 - Ask only impactful questions about target user, core problem, region, budget, or business model.
+- If the user does not clearly provide a region, set region_used exactly to "India".
 - Score each dimension from 0 to 10.
 - Be critical. Most ideas should score between 4 and 7. Reserve 8+ only for genuinely strong ideas.
 - Use practical market reasoning. If exact research is unavailable, state the assumption instead of inventing facts.
@@ -566,20 +622,109 @@ Return this exact JSON structure:
       max_completion_tokens: 4096,
     });
 
-    const analysis = parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}");
+    const analysis = ensureDefaultRegion(parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}"));
     const titleSource = analysis?.idea_summary || projectTitle || rawIdea;
-    const session = await LaunchSession.create({
-      userId: req.userId,
-      rawIdea,
-      projectTitle: String(titleSource).slice(0, 90),
-      status: "reviewing",
-      summaryText: analysis?.idea_summary,
-      researchText: JSON.stringify(analysis),
-    });
+    session.projectTitle = String(titleSource).slice(0, 90);
+    session.status = "reviewing";
+    session.summaryText = analysis?.idea_summary;
+    session.researchText = JSON.stringify(analysis);
+    session.phase1Status = "ready";
+    session.phase1Error = undefined;
+    await session.save();
+    warmBusinessValidationPdf(session);
 
-    res.status(201).json({ session, analysis });
+      } catch (err) {
+        req.log.error({ err, launchSessionId: session._id }, "Azure OpenAI failed to validate business idea");
+        await LaunchSession.findByIdAndUpdate(session._id, {
+          status: "draft",
+          phase1Status: "failed",
+          phase1Error: errorMessage(err),
+        });
+      }
+    })();
   } catch (err) {
     sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to validate business idea");
+  }
+});
+
+router.get("/:id/status", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const session = await LaunchSession.findOne({ _id: req.params.id, userId: req.userId });
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    res.json({
+      session,
+      phase1Status: session.phase1Status ?? (session.researchText ? "ready" : "queued"),
+      phase1Error: session.phase1Error,
+      phase2Status: session.phase2Status ?? (session.technicalDocText ? "ready" : "queued"),
+      phase2Error: session.phase2Error,
+      analysis: session.researchText ? ensureDefaultRegion(parseStoredJson<any>(session.researchText)) : null,
+      blueprint: parseStoredJson<any>(session.technicalDocText),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to fetch launch session status");
+    res.status(500).json({ error: "Failed to fetch launch session status" });
+  }
+});
+
+router.put("/:id/phase1-confirmation", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = ConfirmPhase1OutputBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid Phase 1 confirmation input" });
+    return;
+  }
+
+  try {
+    const session = await LaunchSession.findOne({ _id: req.params.id, userId: req.userId });
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    const currentAnalysis = parseStoredJson<any>(session.researchText) ?? {};
+    const nextAnalysis = mergeBusinessConfirmedPhase1(currentAnalysis, parsed.data);
+    const nextResearchText = JSON.stringify(nextAnalysis);
+    const phase1Changed = session.researchText !== nextResearchText;
+
+    if (!session.phase1AiOutputText) {
+      session.phase1AiOutputText = session.researchText ?? nextResearchText;
+    }
+
+    session.researchText = nextResearchText;
+    session.summaryText = nextAnalysis?.idea_summary;
+    session.phase1ConfirmedAt = new Date();
+    session.phase1Status = "ready";
+    session.phase1Error = undefined;
+
+    if (phase1Changed) {
+      await LaunchClarification.deleteMany({ sessionId: session._id });
+      session.technicalDocText = undefined;
+      session.businessDocText = undefined;
+      session.phase2Status = "queued";
+      session.phase2Error = undefined;
+      session.businessBlueprintPdfStatus = undefined;
+      session.businessBlueprintPdfPath = undefined;
+      session.businessBlueprintPdfHash = undefined;
+      session.businessBlueprintPdfError = undefined;
+      session.businessBlueprintPdfGeneratedAt = undefined;
+    }
+
+    await session.save();
+    warmBusinessValidationPdf(session);
+
+    res.json({
+      session,
+      analysis: nextAnalysis,
+      phase1Status: session.phase1Status,
+      phase2Status: session.phase2Status ?? "queued",
+      blueprint: null,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to confirm Phase 1 output");
+    res.status(500).json({ error: "Failed to confirm Phase 1 output" });
   }
 });
 
@@ -591,11 +736,7 @@ router.get("/:id/business-validation.pdf", requireAuth, async (req: AuthRequest,
       return;
     }
 
-    const analysis = session.researchText ? JSON.parse(session.researchText) : {};
-    const pdf = buildSimplePdf(
-      `${session.projectTitle || "Business Idea"} - Business Validation Report`,
-      formatBusinessValidationLines(analysis)
-    );
+    const pdf = await getOrCreateBusinessValidationPdf(session);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="business-validation-${session._id}.pdf"`);
@@ -629,7 +770,7 @@ async function handleTechnicalQuestions(req: AuthRequest, res: Response) {
       return;
     }
 
-    const analysis = session.researchText ? JSON.parse(session.researchText) : {};
+    const analysis = ensureDefaultRegion(session.researchText ? JSON.parse(session.researchText) : {});
     const prompt = `You are a senior product manager preparing simple technical discovery questions for a non-technical business owner.
 
 Business idea:
@@ -718,8 +859,18 @@ router.post("/:id/blueprint", requireAuth, async (req: AuthRequest, res) => {
 
     await persistDynamicAnswers(session._id as mongoose.Types.ObjectId, parsed.data.answers);
     const technicalAnswersText = await buildTechnicalAnswersText(session._id as mongoose.Types.ObjectId, parsed.data.answers);
-    const businessAnalysis = session.researchText ? JSON.parse(session.researchText) : {};
+    const businessAnalysis = ensureDefaultRegion(session.researchText ? JSON.parse(session.researchText) : {});
 
+    session.technicalAnswersText = technicalAnswersText;
+    session.phase2Status = "generating";
+    session.phase2Error = undefined;
+    session.status = "generating";
+    await session.save();
+
+    res.status(202).json({ session, phase2Status: "generating" });
+
+    void (async () => {
+      try {
     const blueprintSystemPrompt = `You are DEHIX_Business_Development_Blueprint_Generator version 1.0.
 
 Assistant identity:
@@ -858,11 +1009,7 @@ Return this exact JSON structure. Fill every field with concrete, idea-specific 
     "build_now_or_not": "Build Now | Validate Further | Not Recommended",
     "reasoning": "string",
     "mvp_confidence_score": "number 0-10"
-  },
-  "next_options": [
-    { "id": "generate_freelancer_requirements", "label": "Generate Freelancer Hiring Requirements" },
-    { "id": "generate_full_documentation", "label": "Generate Full DOC/PDF Documentation" }
-  ]
+  }
 }`;
 
     const completion = await azureOpenai.chat.completions.create({
@@ -877,9 +1024,20 @@ Return this exact JSON structure. Fill every field with concrete, idea-specific 
     const blueprint = parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}");
     session.technicalDocText = JSON.stringify(blueprint);
     session.status = "reviewing";
+    session.phase2Status = "ready";
+    session.phase2Error = undefined;
     await session.save();
+    warmBusinessBlueprintPdf(session);
 
-    res.json({ session, blueprint });
+      } catch (err) {
+        req.log.error({ err, launchSessionId: session._id }, "Azure OpenAI failed to generate business development blueprint");
+        await LaunchSession.findByIdAndUpdate(session._id, {
+          status: "reviewing",
+          phase2Status: "failed",
+          phase2Error: errorMessage(err),
+        });
+      }
+    })();
   } catch (err) {
     sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate business development blueprint");
   }
@@ -952,11 +1110,7 @@ router.get("/:id/business-blueprint.pdf", requireAuth, async (req: AuthRequest, 
       return;
     }
 
-    const blueprint = JSON.parse(session.technicalDocText);
-    const pdf = buildSimplePdf(
-      `${session.projectTitle || "Business Idea"} - Business Development Blueprint`,
-      formatBusinessBlueprintLines(blueprint)
-    );
+    const pdf = await getOrCreateBusinessBlueprintPdf(session);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="business-blueprint-${session._id}.pdf"`);
@@ -1014,8 +1168,10 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
       })
       .filter(Boolean)
       .join("\n\n");
+    session.technicalAnswersText = technicalAnswersText;
 
-    const businessAnalysis = session.researchText ? JSON.parse(session.researchText) : {};
+    const businessAnalysis = ensureDefaultRegion(session.researchText ? JSON.parse(session.researchText) : {});
+    const businessBlueprint = session.technicalDocText ? JSON.parse(session.technicalDocText) : null;
     const talentRecommendationReport = session.businessDocText ? JSON.parse(session.businessDocText) : null;
     const fullDescription = `Original Idea:\n${session.rawIdea}
 
@@ -1086,11 +1242,14 @@ Return this exact JSON structure:
     const room = await LiveRoom.create({
       roomCode,
       businessId: req.userId,
+      launchSessionId: session._id,
       title: brief?.projectTitle || session.projectTitle || "New Project",
       rawDescription: fullDescription,
       aiScopedBrief: {
         ...brief,
+        launchSessionId: String(session._id),
         businessValidation: businessAnalysis,
+        businessBlueprint,
         talentRecommendations: talentRecommendationReport?.recommendations ?? [],
         talentRecommendationBudgetUsd: talentRecommendationReport?.budgetUsd ?? null,
       },

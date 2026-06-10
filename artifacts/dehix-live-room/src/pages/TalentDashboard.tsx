@@ -8,12 +8,12 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
 const STATUS_COLORS: Record<string, string> = {
-  scoping: "text-blue-400 bg-blue-950/40 border-blue-800/40",
-  matching: "text-amber-400 bg-amber-950/40 border-amber-800/40",
-  open: "text-emerald-400 bg-emerald-950/40 border-emerald-800/40",
-  assembling: "text-violet-400 bg-violet-950/40 border-violet-800/40",
-  contracted: "text-cyan-400 bg-cyan-950/40 border-cyan-800/40",
-  closed: "text-gray-400 bg-gray-950/40 border-gray-700/40",
+  scoping: "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20",
+  matching: "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20",
+  open: "text-green-600 dark:text-green-400 bg-green-500/10 border-green-500/20",
+  assembling: "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20",
+  contracted: "text-green-600 dark:text-green-400 bg-green-500/10 border-green-500/20",
+  closed: "text-muted-foreground bg-muted border-border",
 };
 
 export default function TalentDashboard() {
@@ -130,9 +130,9 @@ export default function TalentDashboard() {
               size="sm"
               variant={isOnline ? "default" : "outline"}
               onClick={toggleOnline}
-              className={isOnline ? "bg-emerald-700 hover:bg-emerald-600 border-emerald-600" : ""}
+              className={isOnline ? "bg-green-700 hover:bg-green-600 border-green-600" : ""}
             >
-              <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${isOnline ? "bg-emerald-300" : "bg-gray-500"}`} />
+              <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${isOnline ? "bg-green-300" : "bg-gray-500"}`} />
               {isOnline ? "Available" : "Offline"}
             </Button>
             <Button size="sm" variant="outline" onClick={() => navigate("/room/join")}>
@@ -202,8 +202,8 @@ export default function TalentDashboard() {
 
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-8">
-          <div className={`rounded-xl border p-4 text-center ${inviteList.length > 0 ? "border-rose-800/40 bg-rose-950/20" : "border-border/40 bg-card"}`}>
-            <div className={`text-2xl font-bold font-mono ${inviteList.length > 0 ? "text-rose-400" : "text-foreground"}`}>{inviteList.length}</div>
+          <div className={`rounded-xl border p-4 text-center ${inviteList.length > 0 ? "border-rose-500/20 bg-rose-500/10" : "border-border/40 bg-card"}`}>
+            <div className={`text-2xl font-bold font-mono ${inviteList.length > 0 ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{inviteList.length}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Pending invites</div>
           </div>
           <div className="rounded-xl border border-border/40 bg-card p-4 text-center">
@@ -214,14 +214,14 @@ export default function TalentDashboard() {
             <div className="text-2xl font-bold font-mono">{credList.length}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Credentials</div>
           </div>
-          <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 p-4 text-center">
-            <div className="text-2xl font-bold font-mono text-emerald-400">
+          <div className="rounded-xl border border-green-500/20 bg-green-500/10 p-4 text-center">
+            <div className="text-2xl font-bold font-mono text-green-600 dark:text-green-400">
               ${myRooms.reduce((s: number, r: any) => s + (r.milestoneStats?.releasedUsd ?? 0), 0).toLocaleString()}
             </div>
             <div className="text-xs text-muted-foreground mt-0.5">Escrow earned</div>
           </div>
-          <div className={`rounded-xl border p-4 text-center cursor-pointer transition-colors ${isOnline ? "border-emerald-800/40 bg-emerald-950/20 hover:bg-emerald-950/30" : "border-border/40 bg-card hover:border-border/70"}`} onClick={toggleOnline}>
-            <div className={`text-2xl font-bold font-mono ${isOnline ? "text-emerald-400" : "text-muted-foreground"}`}>
+          <div className={`rounded-xl border p-4 text-center cursor-pointer transition-colors ${isOnline ? "border-green-500/20 bg-green-500/10 hover:bg-green-500/10" : "border-border/40 bg-card hover:border-border/70"}`} onClick={toggleOnline}>
+            <div className={`text-2xl font-bold font-mono ${isOnline ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
               {isOnline ? "On" : "Off"}
             </div>
             <div className="text-xs text-muted-foreground mt-0.5">Availability</div>
@@ -267,22 +267,22 @@ export default function TalentDashboard() {
                     )}
                     {entry.room.meetLink && (
                       <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                        <p className="text-[11px] text-emerald-400">Meet link available</p>
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                        <p className="text-[11px] text-green-600 dark:text-green-400">Meet link available</p>
                       </div>
                     )}
                     {entry.room.contractedAt && (
-                      <p className="text-[11px] text-cyan-400/70 mt-0.5">Contracted {new Date(entry.room.contractedAt).toLocaleDateString()}</p>
+                      <p className="text-[11px] text-blue-600/80 dark:text-blue-400/70 mt-0.5">Contracted {new Date(entry.room.contractedAt).toLocaleDateString()}</p>
                     )}
                     {entry.milestoneStats?.total > 0 && (
                       <div className="mt-2 space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] text-muted-foreground">Escrow</span>
-                          <span className="text-[10px] font-mono text-emerald-400">${(entry.milestoneStats.releasedUsd ?? 0).toLocaleString()} / ${(entry.milestoneStats.totalUsd ?? 0).toLocaleString()}</span>
+                          <span className="text-[10px] font-mono text-green-600 dark:text-green-400">${(entry.milestoneStats.releasedUsd ?? 0).toLocaleString()} / ${(entry.milestoneStats.totalUsd ?? 0).toLocaleString()}</span>
                         </div>
                         <div className="w-full h-1 rounded-full bg-muted overflow-hidden">
                           <div
-                            className="h-full bg-emerald-500 rounded-full transition-all"
+                            className="h-full bg-green-500 rounded-full transition-all"
                             style={{ width: `${entry.milestoneStats.totalUsd > 0 ? Math.round((entry.milestoneStats.releasedUsd / entry.milestoneStats.totalUsd) * 100) : 0}%` }}
                           />
                         </div>

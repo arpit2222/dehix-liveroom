@@ -13,8 +13,25 @@ export interface ILaunchSession extends Document {
   
   summaryText?: string;
   researchText?: string;
+  phase1AiOutputText?: string;
+  phase1ConfirmedAt?: Date;
   businessDocText?: string;
   technicalDocText?: string;
+  technicalAnswersText?: string;
+  phase1Status?: "queued" | "generating" | "ready" | "failed";
+  phase1Error?: string;
+  phase2Status?: "queued" | "generating" | "ready" | "failed";
+  phase2Error?: string;
+  businessValidationPdfStatus?: "pending" | "ready" | "failed";
+  businessValidationPdfPath?: string;
+  businessValidationPdfHash?: string;
+  businessValidationPdfError?: string;
+  businessValidationPdfGeneratedAt?: Date;
+  businessBlueprintPdfStatus?: "pending" | "ready" | "failed";
+  businessBlueprintPdfPath?: string;
+  businessBlueprintPdfHash?: string;
+  businessBlueprintPdfError?: string;
+  businessBlueprintPdfGeneratedAt?: Date;
   
   createdAt: Date;
   updatedAt: Date;
@@ -37,8 +54,25 @@ const LaunchSessionSchema = new Schema<ILaunchSession>(
     },
     summaryText: { type: String },
     researchText: { type: String },
+    phase1AiOutputText: { type: String },
+    phase1ConfirmedAt: { type: Date },
     businessDocText: { type: String },
     technicalDocText: { type: String },
+    technicalAnswersText: { type: String },
+    phase1Status: { type: String, enum: ["queued", "generating", "ready", "failed"] },
+    phase1Error: { type: String },
+    phase2Status: { type: String, enum: ["queued", "generating", "ready", "failed"] },
+    phase2Error: { type: String },
+    businessValidationPdfStatus: { type: String, enum: ["pending", "ready", "failed"] },
+    businessValidationPdfPath: { type: String },
+    businessValidationPdfHash: { type: String },
+    businessValidationPdfError: { type: String },
+    businessValidationPdfGeneratedAt: { type: Date },
+    businessBlueprintPdfStatus: { type: String, enum: ["pending", "ready", "failed"] },
+    businessBlueprintPdfPath: { type: String },
+    businessBlueprintPdfHash: { type: String },
+    businessBlueprintPdfError: { type: String },
+    businessBlueprintPdfGeneratedAt: { type: Date },
   },
   { timestamps: true, collection: "dl_launch_sessions" }
 );
