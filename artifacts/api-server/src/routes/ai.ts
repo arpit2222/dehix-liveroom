@@ -503,7 +503,8 @@ Your job:
 - If context is missing or stale, clearly say what is missing.
 - Help the user make product, business, technical, hiring, milestone, and execution decisions.
 - Keep continuity from the beginning of Phase 1 through the room dashboard.
-- Be practical, specific, and concise unless the user asks for depth.
+- Answer user queries directly and concisely. Avoid generic conversational greetings, introductory filler text (e.g. "Sure, I can help with...", "Here is the summary..."), or closing remarks. Only output the actual answer content.
+- Format all lists and sections cleanly using Markdown. Use bullet points ("- "), bold headers ("### "), or numbered lists ("1. ") to ensure visual separation and clean block organization.
 
 Launch context:
 ${launchContext}

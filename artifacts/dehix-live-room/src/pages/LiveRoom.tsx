@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { useParams, useLocation } from "wouter";
 import { io, type Socket } from "socket.io-client";
 import {
@@ -149,6 +149,79 @@ interface ChatMessage {
 }
 
 let localMsgId = 0;
+
+function MarkdownMini({ text }: { text: string }) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  const elements: ReactNode[] = [];
+  let currentList: ReactNode[] = [];
+  let isNumberList = false;
+
+  const parseInline = (str: string) => {
+    const parts = str.split(/(\*\*.*?\*\*|`.*?`)/g);
+    return parts.map((part, idx) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        return <strong key={idx} className="font-bold text-foreground">{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith("`") && part.endsWith("`")) {
+        return <code key={idx} className="bg-primary/10 text-primary px-1.5 py-0.5 rounded text-[11px] font-mono border border-primary/10">{part.slice(1, -1)}</code>;
+      }
+      return part;
+    });
+  };
+
+  const flushList = (keyPrefix: string) => {
+    if (currentList.length > 0) {
+      if (isNumberList) {
+        elements.push(
+          <ol key={`ol-${keyPrefix}`} className="list-decimal pl-5 space-y-1 my-2 text-xs">
+            {currentList}
+          </ol>
+        );
+      } else {
+        elements.push(
+          <ul key={`ul-${keyPrefix}`} className="list-disc pl-5 space-y-1 my-2 text-xs">
+            {currentList}
+          </ul>
+        );
+      }
+      currentList = [];
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const isBullet = trimmed.startsWith("- ") || trimmed.startsWith("* ");
+    const isNumber = /^\d+\.\s/.test(trimmed);
+
+    if (isBullet || isNumber) {
+      if (currentList.length > 0 && isNumberList !== isNumber) {
+        flushList(`switch-${i}`);
+      }
+      isNumberList = isNumber;
+      const content = isBullet ? trimmed.substring(2) : trimmed.substring(trimmed.indexOf(".") + 1).trim();
+      currentList.push(
+        <li key={`li-${i}`} className="text-xs leading-relaxed text-foreground/90">
+          {parseInline(content)}
+        </li>
+      );
+    } else {
+      flushList(`flush-${i}`);
+      if (trimmed) {
+        if (trimmed.startsWith("### ")) {
+          elements.push(<h4 key={i} className="text-xs font-bold text-foreground mt-3 mb-1 uppercase tracking-wide">{parseInline(trimmed.substring(4))}</h4>);
+        } else if (trimmed.startsWith("## ")) {
+          elements.push(<h3 key={i} className="text-sm font-bold text-foreground mt-4 mb-1.5">{parseInline(trimmed.substring(3))}</h3>);
+        } else {
+          elements.push(<p key={i} className="my-1.5 leading-relaxed text-xs text-foreground/85">{parseInline(trimmed)}</p>);
+        }
+      }
+    }
+  }
+  flushList("final");
+  return <div className="space-y-1">{elements}</div>;
+}
 
 export default function LiveRoom() {
   const { id } = useParams<{ id: string }>();
@@ -2027,7 +2100,7 @@ export default function LiveRoom() {
                       )}
                     </div>
                     
-                    <p className="text-foreground/90 leading-relaxed whitespace-pre-wrap">{msg.message}</p>
+                    <div className="text-foreground/90 leading-relaxed"><MarkdownMini text={msg.message} /></div>
                     
                     {docMode && (
                       <div className="flex gap-1.5 mt-2 pt-2 border-t border-border/10">

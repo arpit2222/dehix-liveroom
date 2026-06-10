@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Search, Sparkles, Send, MessageSquare, MapPin, Award, CheckCircle, AlertCircle, RefreshCw, ChevronRight, HelpCircle, ArrowRight, ArrowUp, X, Globe, Layers, Cpu, FileText, Layout, TrendingUp, Coins } from "lucide-react";
+import { Search, Sparkles, Send, MessageSquare, MapPin, Award, CheckCircle, AlertCircle, RefreshCw, ChevronRight, HelpCircle, ArrowRight, ArrowUp, X, Globe, Layers, Cpu, FileText, Layout, TrendingUp, Coins, Lightbulb, Activity, DollarSign } from "lucide-react";
 import { toast } from "sonner";
 
 type WizardPhase = "idea" | "analysis" | "technical" | "blueprint" | "recommendations";
@@ -562,6 +562,79 @@ function ScorePill({ label, value }: { label: string; value: number }) {
   );
 }
 
+export function MarkdownMini({ text }: { text: string }) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  const elements: ReactNode[] = [];
+  let currentList: ReactNode[] = [];
+  let isNumberList = false;
+
+  const parseInline = (str: string) => {
+    const parts = str.split(/(\*\*.*?\*\*|`.*?`)/g);
+    return parts.map((part, idx) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        return <strong key={idx} className="font-bold text-foreground">{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith("`") && part.endsWith("`")) {
+        return <code key={idx} className="bg-primary/10 text-primary px-1.5 py-0.5 rounded text-[11px] font-mono border border-primary/10">{part.slice(1, -1)}</code>;
+      }
+      return part;
+    });
+  };
+
+  const flushList = (keyPrefix: string) => {
+    if (currentList.length > 0) {
+      if (isNumberList) {
+        elements.push(
+          <ol key={`ol-${keyPrefix}`} className="list-decimal pl-5 space-y-1.5 my-2 text-xs">
+            {currentList}
+          </ol>
+        );
+      } else {
+        elements.push(
+          <ul key={`ul-${keyPrefix}`} className="list-disc pl-5 space-y-1.5 my-2 text-xs">
+            {currentList}
+          </ul>
+        );
+      }
+      currentList = [];
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const isBullet = trimmed.startsWith("- ") || trimmed.startsWith("* ");
+    const isNumber = /^\d+\.\s/.test(trimmed);
+
+    if (isBullet || isNumber) {
+      if (currentList.length > 0 && isNumberList !== isNumber) {
+        flushList(`switch-${i}`);
+      }
+      isNumberList = isNumber;
+      const content = isBullet ? trimmed.substring(2) : trimmed.substring(trimmed.indexOf(".") + 1).trim();
+      currentList.push(
+        <li key={`li-${i}`} className="text-xs leading-relaxed text-foreground/90">
+          {parseInline(content)}
+        </li>
+      );
+    } else {
+      flushList(`flush-${i}`);
+      if (trimmed) {
+        if (trimmed.startsWith("### ")) {
+          elements.push(<h4 key={i} className="text-xs font-bold text-foreground mt-3 mb-1 uppercase tracking-wide">{parseInline(trimmed.substring(4))}</h4>);
+        } else if (trimmed.startsWith("## ")) {
+          elements.push(<h3 key={i} className="text-sm font-bold text-foreground mt-4 mb-1.5">{parseInline(trimmed.substring(3))}</h3>);
+        } else {
+          elements.push(<p key={i} className="my-1.5 leading-relaxed text-xs text-foreground/85">{parseInline(trimmed)}</p>);
+        }
+      }
+    }
+  }
+  flushList("final");
+  return <div className="space-y-1.5">{elements}</div>;
+}
+
 function SectionList({ title, items }: { title: string; items?: string[] }) {
   if (!items || items.length === 0) return null;
   return (
@@ -575,6 +648,51 @@ function SectionList({ title, items }: { title: string; items?: string[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function BlockSectionList({ title, items }: { title: string; items?: string[] }) {
+  if (!items || items.length === 0) return null;
+
+  const titleLower = title.toLowerCase();
+  let themeClass = "border-border/30 bg-background/20 hover:border-border/50";
+  let itemBgClass = "bg-background/40 border-border/20";
+  let iconColor = "text-primary";
+  let borderLeftAccent = "border-l-primary/45";
+
+  if (titleLower.includes("strength")) {
+    themeClass = "border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-500/30 shadow-[0_2px_8px_rgba(16,185,129,0.02)]";
+    itemBgClass = "bg-emerald-500/10 border-emerald-500/15";
+    iconColor = "text-emerald-400";
+    borderLeftAccent = "border-l-emerald-500";
+  } else if (titleLower.includes("weakness")) {
+    themeClass = "border-rose-500/20 bg-rose-500/5 hover:border-rose-500/30 shadow-[0_2px_8px_rgba(244,63,94,0.02)]";
+    itemBgClass = "bg-rose-500/10 border-rose-500/15";
+    iconColor = "text-rose-400";
+    borderLeftAccent = "border-l-rose-500";
+  } else if (titleLower.includes("opportunity") || titleLower.includes("action") || titleLower.includes("roadmap") || titleLower.includes("module")) {
+    themeClass = "border-blue-500/20 bg-blue-500/5 hover:border-blue-500/30 shadow-[0_2px_8px_rgba(59,130,246,0.02)]";
+    itemBgClass = "bg-blue-500/10 border-blue-500/15";
+    iconColor = "text-blue-400";
+    borderLeftAccent = "border-l-blue-500";
+  } else if (titleLower.includes("threat") || titleLower.includes("risk") || titleLower.includes("warning")) {
+    themeClass = "border-amber-500/20 bg-amber-500/5 hover:border-amber-500/30 shadow-[0_2px_8px_rgba(245,158,11,0.02)]";
+    itemBgClass = "bg-amber-500/10 border-amber-500/15";
+    iconColor = "text-amber-400";
+    borderLeftAccent = "border-l-amber-500";
+  }
+
+  return (
+    <div className={`space-y-3 rounded-xl border p-4 transition-all duration-200 ${themeClass}`}>
+      <h3 className={`text-[10px] font-bold uppercase tracking-wider ${iconColor}`}>{title}</h3>
+      <div className="space-y-2">
+        {items.map((item, index) => (
+          <div key={index} className={`rounded-lg border p-3 text-xs leading-relaxed text-foreground/90 border-l-4 ${borderLeftAccent} ${itemBgClass} shadow-sm`}>
+            {item}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1017,13 +1135,68 @@ function AnalysisDetails({
       description: "A quick read on how the idea performed.",
       keywords: stringifyForSearch(scores),
       body: (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          {Object.entries(SCORE_LABELS).map(([key, label]) => (
-            <div key={key} className="rounded-lg border border-border/40 bg-background/40 p-3">
-              <div className="text-xs text-muted-foreground mb-1">{label}</div>
-              <div className="text-xl font-semibold font-mono">{scores[key] ?? "N/A"}</div>
-            </div>
-          ))}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {Object.entries(SCORE_LABELS).map(([key, label]) => {
+            const rawVal = scores[key];
+            const numVal = typeof rawVal === "number" ? rawVal : parseFloat(String(rawVal)) || 0;
+            const displayVal = rawVal !== undefined ? rawVal : "N/A";
+
+            let colorClass = "text-amber-500 bg-amber-500/10 border-amber-500/20";
+            let meterColor = "bg-amber-500";
+            let shadowGlow = "shadow-[0_0_12px_rgba(245,158,11,0.12)]";
+            if (numVal >= 8) {
+              colorClass = "text-emerald-500 bg-emerald-500/10 border-emerald-500/20";
+              meterColor = "bg-emerald-500";
+              shadowGlow = "shadow-[0_0_12px_rgba(16,185,129,0.12)]";
+            } else if (numVal < 5 && numVal > 0) {
+              colorClass = "text-rose-500 bg-rose-500/10 border-rose-500/20";
+              meterColor = "bg-rose-500";
+              shadowGlow = "shadow-[0_0_12px_rgba(244,63,94,0.12)]";
+            }
+
+            let scoreIcon = <Award className="h-4 w-4 shrink-0" />;
+            if (key === "market_opportunity") scoreIcon = <TrendingUp className="h-4 w-4 shrink-0" />;
+            else if (key === "problem_clarity") scoreIcon = <Lightbulb className="h-4 w-4 shrink-0" />;
+            else if (key === "solution_differentiation") scoreIcon = <Sparkles className="h-4 w-4 shrink-0" />;
+            else if (key === "execution_feasibility") scoreIcon = <Activity className="h-4 w-4 shrink-0" />;
+            else if (key === "revenue_potential") scoreIcon = <DollarSign className="h-4 w-4 shrink-0" />;
+
+            return (
+              <div 
+                key={key} 
+                className={`relative overflow-hidden rounded-xl border border-border/50 bg-gradient-to-b from-card/85 to-card/35 p-4 transition-all duration-300 hover:border-primary/30 hover:${shadowGlow} group`}
+              >
+                <div className="absolute -right-4 -bottom-4 w-12 h-12 rounded-full bg-primary/5 blur-xl group-hover:bg-primary/10 transition-colors" />
+
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider truncate flex-1">{label}</div>
+                  <div className={`p-1.5 rounded-lg border ${colorClass} shrink-0`}>
+                    {scoreIcon}
+                  </div>
+                </div>
+
+                <div className="flex items-baseline gap-1 mb-2">
+                  <span className="text-3xl font-black font-mono text-foreground tracking-tight">{displayVal}</span>
+                  {rawVal !== undefined && <span className="text-xs text-muted-foreground/50">/10</span>}
+                </div>
+
+                {rawVal !== undefined && (
+                  <div className="space-y-1">
+                    <div className="w-full h-1.5 rounded-full bg-muted/60 overflow-hidden">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-1000 ${meterColor}`} 
+                        style={{ width: `${numVal * 10}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[9px] font-bold text-muted-foreground/45">
+                      <span>Low</span>
+                      <span>High</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       ),
     },
@@ -1067,8 +1240,8 @@ function AnalysisDetails({
       keywords: [...(research?.risks ?? []), ...(research?.suggestions ?? [])].join(" "),
       body: (
         <div className="grid gap-6 md:grid-cols-2">
-          <SectionList title="Top risks" items={research?.risks} />
-          <SectionList title="Recommended actions" items={research?.suggestions} />
+          <BlockSectionList title="Top risks" items={research?.risks} />
+          <BlockSectionList title="Recommended actions" items={research?.suggestions} />
         </div>
       ),
     },
@@ -1079,10 +1252,10 @@ function AnalysisDetails({
       keywords: stringifyForSearch(research?.swot),
       body: (
         <div className="grid gap-6 md:grid-cols-2">
-          <SectionList title="Strengths" items={research?.swot?.strengths} />
-          <SectionList title="Weaknesses" items={research?.swot?.weaknesses} />
-          <SectionList title="Opportunities" items={research?.swot?.opportunities} />
-          <SectionList title="Threats" items={research?.swot?.threats} />
+          <BlockSectionList title="Strengths" items={research?.swot?.strengths} />
+          <BlockSectionList title="Weaknesses" items={research?.swot?.weaknesses} />
+          <BlockSectionList title="Opportunities" items={research?.swot?.opportunities} />
+          <BlockSectionList title="Threats" items={research?.swot?.threats} />
         </div>
       ),
     },
@@ -1223,6 +1396,7 @@ export default function CreateRoom() {
   const [activeReportSection, setActiveReportSection] = useState<ActiveReportSection | null>(null);
   const [activeQuestion, setActiveQuestion] = useState<ActiveQuestion | null>(null);
   const [suggestingId, setSuggestingId] = useState<string | null>(null);
+  const [usedAiSuggest, setUsedAiSuggest] = useState<Record<string, boolean>>({});
   const [refineInputs, setRefineInputs] = useState<Record<string, string>>({});
   const [isChatOpen, setChatOpen] = useState(true);
   const [expandedRefineFields, setExpandedRefineFields] = useState<Record<string, boolean>>({});
@@ -1274,6 +1448,10 @@ Please return ONLY the recommended answer itself, without any introductory or co
       setAnswers(prev => ({
         ...prev,
         [questionId]: reply
+      }));
+      setUsedAiSuggest(prev => ({
+        ...prev,
+        [questionId]: true
       }));
       toast.success("Suggested answer generated!");
     } catch (err: any) {
@@ -2321,25 +2499,32 @@ Please return ONLY the modified text itself, without any introductory or convers
                   const refineVal = refineInputs[question._id] || "";
                   const isRefineOpen = expandedRefineFields[question._id] || false;
 
+                  const hasSuggested = usedAiSuggest[question._id] || false;
+
                   return (
                     <div key={question._id} className="space-y-3 rounded-xl border border-border/30 bg-background/20 p-4 transition-all hover:border-border/50">
-                      <div className="flex items-center justify-between gap-3 flex-wrap">
-                        <label className="text-sm font-semibold text-foreground">
+                      <div className="flex items-start justify-between gap-4 w-full">
+                        <label className="text-sm font-semibold text-foreground flex-1 leading-relaxed">
                           {index + 1}. {question.question} <span className="text-primary">*</span>
                         </label>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0">
                           <Button
                             type="button"
                             variant="ghost"
                             size="sm"
                             className="h-7 px-2.5 text-xs text-primary bg-primary/5 hover:bg-primary/10 gap-1.5"
                             onClick={() => handleAiSuggest(question._id, question.question)}
-                            disabled={suggestingId !== null}
+                            disabled={suggestingId !== null || hasSuggested}
                           >
                             {isSuggestingThis ? (
                               <>
                                 <span className="w-3 h-3 rounded-full border border-primary/40 border-t-primary animate-spin" />
                                 Suggesting...
+                              </>
+                            ) : hasSuggested ? (
+                              <>
+                                <CheckCircle className="h-3 w-3 text-muted-foreground/60" />
+                                Suggested
                               </>
                             ) : (
                               <>
@@ -2451,23 +2636,30 @@ Please return ONLY the modified text itself, without any introductory or convers
                       const refineVal = refineInputs[question._id] || "";
                       const isRefineOpen = expandedRefineFields[question._id] || false;
 
+                      const hasSuggested = usedAiSuggest[question._id] || false;
+
                       return (
                         <div key={question._id} className="space-y-3 rounded-xl border border-border/30 bg-background/20 p-4 transition-all hover:border-border/50">
-                          <div className="flex items-center justify-between gap-3 flex-wrap">
-                            <label className="text-sm font-semibold text-foreground">{index + 1}. {question.question}</label>
-                            <div className="flex items-center gap-2">
+                          <div className="flex items-start justify-between gap-4 w-full">
+                            <label className="text-sm font-semibold text-foreground flex-1 leading-relaxed">{index + 1}. {question.question}</label>
+                            <div className="flex items-center gap-2 shrink-0">
                               <Button
                                 type="button"
                                 variant="ghost"
                                 size="sm"
                                 className="h-7 px-2.5 text-xs text-primary bg-primary/5 hover:bg-primary/10 gap-1.5"
                                 onClick={() => handleAiSuggest(question._id, question.question)}
-                                disabled={suggestingId !== null}
+                                disabled={suggestingId !== null || hasSuggested}
                               >
                                 {isSuggestingThis ? (
                                   <>
                                     <span className="w-3 h-3 rounded-full border border-primary/40 border-t-primary animate-spin" />
                                     Suggesting...
+                                  </>
+                                ) : hasSuggested ? (
+                                  <>
+                                    <CheckCircle className="h-3 w-3 text-muted-foreground/60" />
+                                    Suggested
                                   </>
                                 ) : (
                                   <>
@@ -2788,7 +2980,7 @@ Please return ONLY the modified text itself, without any introductory or convers
                       </div>
                       <div className="space-y-1">
                         <div className="rounded-2xl rounded-tl-none border border-primary/15 bg-primary/5/30 backdrop-blur-sm px-3.5 py-2.5 text-xs text-foreground/95 leading-relaxed shadow-sm">
-                          <p className="whitespace-pre-wrap">{msg.message}</p>
+                          <MarkdownMini text={msg.message} />
                         </div>
                         <span className="text-[8px] font-bold uppercase tracking-wider text-primary/80 px-1">DEHIX AI</span>
                       </div>
