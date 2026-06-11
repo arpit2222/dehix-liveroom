@@ -1,8 +1,9 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
-import { setAuthTokenGetter, setUnauthorizedHandler } from "@workspace/api-client-react";
+import { setAuthTokenGetter, setUnauthorizedHandler, setBaseUrl } from "@workspace/api-client-react";
 
+setBaseUrl(import.meta.env.VITE_API_URL || null);
 setAuthTokenGetter(() => localStorage.getItem("dehix_token"));
 setUnauthorizedHandler(() => {
   localStorage.removeItem("dehix_token");
