@@ -4,6 +4,14 @@ import "./index.css";
 import { setAuthTokenGetter, setUnauthorizedHandler, setBaseUrl } from "@workspace/api-client-react";
 
 setBaseUrl(import.meta.env.VITE_API_URL || null);
+const originalFetch = window.fetch;
+window.fetch = async (input, init) => {
+  const baseUrl = import.meta.env.VITE_API_URL || "";
+  if (typeof input === "string" && input.startsWith("/api/")) {
+    return originalFetch(baseUrl + input, init);
+  }
+  return originalFetch(input, init);
+};
 setAuthTokenGetter(() => localStorage.getItem("dehix_token"));
 setUnauthorizedHandler(() => {
   localStorage.removeItem("dehix_token");
