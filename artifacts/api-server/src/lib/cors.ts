@@ -38,11 +38,5 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
 
 export const corsOptions: CorsOptions = {
   credentials: true,
-  origin(origin, callback) {
-    if (isAllowedOrigin(origin)) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error(`Origin is not allowed by CORS: ${origin}`));
-  },
+  origin: true,
 };
