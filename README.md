@@ -12,7 +12,7 @@ Full-stack real-time AI-powered Web3 hiring platform. A standard npm monorepo wi
 - Node.js version 24
 - MongoDB (running locally or via Atlas)
 - Firebase (for Live Chat)
-- Azure OpenAI resource, API key, API version, and deployed chat model name
+- Azure OpenAI chat deployment or a Gemini API key for AI features
 
 ## Setup & Running
 
@@ -24,10 +24,13 @@ Full-stack real-time AI-powered Web3 hiring platform. A standard npm monorepo wi
 2. **Environment Configuration**
    Copy `.env.example` to `artifacts/api-server/.env` and fill in your details:
    - `MONGODB_URI`: Your MongoDB connection string.
+   - `AI_PROVIDER`: `auto`, `azure-openai`, or `gemini`. `auto` uses Azure OpenAI when fully configured, otherwise Gemini when `GEMINI_API_KEY` is set.
    - `AZURE_OPENAI_ENDPOINT`: Your Azure OpenAI endpoint, for example `https://your-resource-name.openai.azure.com`.
    - `AZURE_OPENAI_API_KEY`: Your Azure OpenAI API key.
    - `AZURE_OPENAI_API_VERSION`: Azure OpenAI API version used by your resource.
    - `AZURE_OPENAI_DEPLOYMENT`: The deployment name of your chat model in Azure OpenAI.
+   - `GEMINI_API_KEY`: Your Google Gemini API key.
+   - `GEMINI_MODEL`: Gemini model name, defaults to `gemini-2.5-flash`.
    - Firebase credentials (if you want live chat).
 
 3. **Seed Database (Demo Data)**
@@ -57,7 +60,7 @@ Before deploying, set these environment variables on the hosting platform:
 - `CORS_ORIGINS` or `CLIENT_ORIGIN`: Exact frontend URL, for example `https://app.example.com`. Use comma-separated values for multiple allowed origins.
 - `VITE_API_URL`: Public API origin used by the frontend build when the API is not served from the same origin.
 - `VITE_ALLOWED_HOSTS`: Comma-separated hostnames allowed by Vite preview/dev, for example `app.example.com`.
-- Azure OpenAI and Firebase values from `.env.example` as needed.
+- AI provider and Firebase values from `.env.example` as needed.
 
 Run these checks before handing a build to production:
 
@@ -77,11 +80,13 @@ Security hardening included in the backend:
 
 Keep the seeded demo accounts out of production databases. Use `npm run seed` only for local demos or isolated staging data.
 
-## Azure OpenAI Notes
+## AI Provider Notes
 
 - Azure OpenAI uses deployment names in API calls. Set `AZURE_OPENAI_DEPLOYMENT` to the deployment name you created in Azure, not just the model family name.
+- Gemini uses `GEMINI_API_KEY` and optional `GEMINI_MODEL`. Set `AI_PROVIDER=gemini` to force Gemini even when Azure OpenAI variables are also present.
+- With `AI_PROVIDER=auto`, the backend uses Azure OpenAI first when all Azure chat variables are valid, then falls back to Gemini when `GEMINI_API_KEY` is configured.
 - If you add image, audio, or transcription deployments later, set `AZURE_OPENAI_IMAGE_DEPLOYMENT`, `AZURE_OPENAI_AUDIO_DEPLOYMENT`, or `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT`.
-- If Azure OpenAI variables are missing or the Azure request fails, AI endpoints return an error instead of generated placeholder content.
+- If no AI provider is configured or the provider request fails, AI endpoints return an error instead of generated placeholder content.
 
 ## Demo Accounts
 

@@ -35,7 +35,7 @@ Request body:
 }
 ```
 
-Backend Azure OpenAI ko business validation prompt bhejta hai. Is phase mein AI ko clearly bola gaya hai:
+Backend configured AI provider ko business validation prompt bhejta hai. Is phase mein AI ko clearly bola gaya hai:
 
 - Technical documentation generate nahi karni.
 - Freelancers select nahi karne.
@@ -230,7 +230,7 @@ Mandatory questions fixed hain:
 4. Will the product need user accounts, payments, file uploads, chat, maps, AI, blockchain, or third-party integrations?
 5. Do you have any fixed timeline, budget range, compliance needs, or existing tools/data that the team must work with?
 
-Dynamic optional questions Azure OpenAI generate karta hai business idea ke basis par.
+Dynamic optional questions configured AI provider generate karta hai business idea ke basis par.
 
 Rules:
 
@@ -304,22 +304,29 @@ aiScopedBrief: {
 }
 ```
 
-## Azure OpenAI Error Handling
+## AI Provider Error Handling
 
 Mock fallback nahi hai.
 
 Current behavior:
 
-- Azure env missing ho toh `503`
-- Azure API fail ho toh `502`
+- AI provider env missing ho toh `503`
+- AI provider API fail ho toh `502`
 - Frontend error toast/show karta hai
 
 Required env vars:
 
+- `AI_PROVIDER` optional: `auto`, `azure-openai`, or `gemini`
+
+Azure OpenAI:
 - `AZURE_OPENAI_ENDPOINT`
 - `AZURE_OPENAI_API_KEY`
 - `AZURE_OPENAI_API_VERSION`
 - `AZURE_OPENAI_DEPLOYMENT`
+
+Gemini:
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL` optional
 
 ## Consistency Issues We May See
 
@@ -532,8 +539,8 @@ Priority 3:
 
 ## Summary
 
-Abhi system pure Azure OpenAI based hai. Business idea pehle validate hota hai, phir validation report PDF download ho sakti hai, phir technical intake questions ke answer se live room dashboard create hota hai.
+Abhi system configured AI provider based hai: Azure OpenAI ya Gemini. Business idea pehle validate hota hai, phir validation report PDF download ho sakti hai, phir technical intake questions ke answer se live room dashboard create hota hai.
 
-Mock output nahi hai. Agar Azure config ya API fail hoti hai toh user ko error dikhega.
+Mock output nahi hai. Agar selected AI provider config ya API fail hoti hai toh user ko error dikhega.
 
 Consistency improve karne ke liye sabse important next step hai: schema validation, backend-side score calculation, lower temperature, prompt versioning, and better PDF generation pipeline.

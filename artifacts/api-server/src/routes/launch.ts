@@ -1,6 +1,6 @@
 import { Router, type Response } from "express";
 import mongoose from "mongoose";
-import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled, missingAzureOpenAiEnvVars } from "../lib/openai.js";
+import { azureOpenai, azureOpenAiDeployment, isAiProviderEnabled, missingAiProviderEnvVars } from "../lib/openai.js";
 import {
   getOrCreateBusinessBlueprintPdf,
   getOrCreateBusinessValidationPdf,
@@ -17,19 +17,19 @@ import { ConfirmPhase1OutputBody, CreateLaunchSessionBody, ScopeLaunchSessionBod
 
 const router = Router();
 
-function requireAzureOpenAi(res: Response): boolean {
-  if (isAzureOpenAiEnabled) {
+function requireAiProvider(res: Response): boolean {
+  if (isAiProviderEnabled) {
     return true;
   }
 
   res.status(503).json({
-    error: "Azure OpenAI is not configured",
-    missingEnvVars: missingAzureOpenAiEnvVars,
+    error: "AI provider is not configured",
+    missingEnvVars: missingAiProviderEnvVars,
   });
   return false;
 }
 
-function sendAzureOpenAiError(req: AuthRequest, res: Response, err: unknown, message: string) {
+function sendAiProviderError(req: AuthRequest, res: Response, err: unknown, message: string) {
   req.log.error({ err }, message);
   res.status(502).json({ error: message });
 }
@@ -38,7 +38,7 @@ function cleanJsonContent(content: string): string {
   return content.replace(/```json\n?|\n?```/g, "").trim();
 }
 
-function parseAzureJson<T>(content: string): T {
+function parseAiJson<T>(content: string): T {
   return JSON.parse(cleanJsonContent(content)) as T;
 }
 
@@ -520,7 +520,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   }
   const { rawIdea, projectTitle } = parsed.data;
 
-  if (!requireAzureOpenAi(res)) {
+  if (!requireAiProvider(res)) {
     return;
   }
 
@@ -622,7 +622,7 @@ Return this exact JSON structure:
       max_completion_tokens: 4096,
     });
 
-    const analysis = ensureDefaultRegion(parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}"));
+    const analysis = ensureDefaultRegion(parseAiJson<any>(completion.choices[0]?.message?.content ?? "{}"));
     const titleSource = analysis?.idea_summary || projectTitle || rawIdea;
     session.projectTitle = String(titleSource).slice(0, 90);
     session.status = "reviewing";
@@ -634,7 +634,7 @@ Return this exact JSON structure:
     warmBusinessValidationPdf(session);
 
       } catch (err) {
-        req.log.error({ err, launchSessionId: session._id }, "Azure OpenAI failed to validate business idea");
+        req.log.error({ err, launchSessionId: session._id }, "AI provider failed to validate business idea");
         await LaunchSession.findByIdAndUpdate(session._id, {
           status: "draft",
           phase1Status: "failed",
@@ -643,7 +643,7 @@ Return this exact JSON structure:
       }
     })();
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to validate business idea");
+    sendAiProviderError(req, res, err, "AI provider failed to validate business idea");
   }
 });
 
@@ -761,11 +761,11 @@ async function handleTechnicalQuestions(req: AuthRequest, res: Response) {
       return;
     }
 
-    if (!isAzureOpenAiEnabled) {
+    if (!isAiProviderEnabled) {
       res.json({
         mandatoryQuestions: TECH_MANDATORY_QUESTIONS,
         optionalQuestions: [],
-        optionalQuestionError: "Azure OpenAI is not configured",
+        optionalQuestionError: "AI provider is not configured",
       });
       return;
     }
@@ -798,7 +798,7 @@ Return ONLY a valid JSON array of strings.`;
         max_completion_tokens: 1024,
       });
 
-      const parsedQuestions = parseAzureJson<unknown>(completion.choices[0]?.message?.content ?? "[]");
+      const parsedQuestions = parseAiJson<unknown>(completion.choices[0]?.message?.content ?? "[]");
       const rawQuestions = Array.isArray(parsedQuestions)
         ? parsedQuestions
         : Array.isArray((parsedQuestions as any)?.questions)
@@ -818,7 +818,7 @@ Return ONLY a valid JSON array of strings.`;
 
       res.json({ mandatoryQuestions: TECH_MANDATORY_QUESTIONS, optionalQuestions });
     } catch (err) {
-      req.log.error({ err }, "Azure OpenAI failed to generate optional technical questions");
+      req.log.error({ err }, "AI provider failed to generate optional technical questions");
       res.json({
         mandatoryQuestions: TECH_MANDATORY_QUESTIONS,
         optionalQuestions: [],
@@ -840,7 +840,7 @@ router.post("/:id/blueprint", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
 
-  if (!requireAzureOpenAi(res)) {
+  if (!requireAiProvider(res)) {
     return;
   }
 
@@ -1021,7 +1021,7 @@ Return this exact JSON structure. Fill every field with concrete, idea-specific 
       max_completion_tokens: 8192,
     });
 
-    const blueprint = parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}");
+    const blueprint = parseAiJson<any>(completion.choices[0]?.message?.content ?? "{}");
     session.technicalDocText = JSON.stringify(blueprint);
     session.status = "reviewing";
     session.phase2Status = "ready";
@@ -1030,7 +1030,7 @@ Return this exact JSON structure. Fill every field with concrete, idea-specific 
     warmBusinessBlueprintPdf(session);
 
       } catch (err) {
-        req.log.error({ err, launchSessionId: session._id }, "Azure OpenAI failed to generate business development blueprint");
+        req.log.error({ err, launchSessionId: session._id }, "AI provider failed to generate business development blueprint");
         await LaunchSession.findByIdAndUpdate(session._id, {
           status: "reviewing",
           phase2Status: "failed",
@@ -1039,7 +1039,7 @@ Return this exact JSON structure. Fill every field with concrete, idea-specific 
       }
     })();
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate business development blueprint");
+    sendAiProviderError(req, res, err, "AI provider failed to generate business development blueprint");
   }
 });
 
@@ -1127,7 +1127,7 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
 
-  if (!requireAzureOpenAi(res)) {
+  if (!requireAiProvider(res)) {
     return;
   }
 
@@ -1237,7 +1237,7 @@ Return this exact JSON structure:
       max_completion_tokens: 4096,
     });
 
-    const brief = parseAzureJson<any>(completion.choices[0]?.message?.content ?? "{}");
+    const brief = parseAiJson<any>(completion.choices[0]?.message?.content ?? "{}");
     const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const room = await LiveRoom.create({
       roomCode,
@@ -1261,7 +1261,7 @@ Return this exact JSON structure:
 
     res.json(room);
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to scope launch session");
+    sendAiProviderError(req, res, err, "AI provider failed to scope launch session");
   }
 });
 

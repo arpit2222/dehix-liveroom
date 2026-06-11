@@ -51,10 +51,13 @@ Important variables:
 ```txt
 MONGODB_URI=
 SESSION_SECRET=
+AI_PROVIDER=auto
 AZURE_OPENAI_ENDPOINT=
 AZURE_OPENAI_API_KEY=
 AZURE_OPENAI_API_VERSION=
 AZURE_OPENAI_DEPLOYMENT=
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
 FIREBASE_API_KEY=
 FIREBASE_APP_ID=
 FIREBASE_PROJECT_ID=
@@ -222,7 +225,7 @@ artifacts/api-server/src/routes/health.ts     Health check
 Backend helpers:
 
 ```txt
-artifacts/api-server/src/lib/openai.ts          Azure OpenAI client/env config
+artifacts/api-server/src/lib/openai.ts          AI provider config for Azure OpenAI/Gemini
 artifacts/api-server/src/lib/mongodb.ts         Mongo connection
 artifacts/api-server/src/lib/jwt.ts             JWT helper
 artifacts/api-server/src/lib/logger.ts          Pino logger
@@ -412,7 +415,7 @@ Flow:
 ```txt
 1. User enters raw business idea.
 2. Frontend calls POST /api/launch.
-3. Backend sends Phase 1 business validation prompt to Azure OpenAI.
+3. Backend sends Phase 1 business validation prompt to the configured AI provider.
 4. Backend saves LaunchSession.researchText.
 5. Backend starts background validation PDF warmup.
 6. Frontend shows business analysis.
@@ -422,7 +425,7 @@ Flow:
 10. Backend generates optional questions and returns mandatory + optional questions.
 11. User answers questions.
 12. Frontend calls POST /api/launch/:id/blueprint.
-13. Backend sends blueprint prompt to Azure OpenAI.
+13. Backend sends blueprint prompt to the configured AI provider.
 14. Backend saves LaunchSession.technicalDocText.
 15. Backend starts background blueprint PDF warmup.
 16. Frontend shows blueprint report.
@@ -954,4 +957,3 @@ User clicks "Download PDF"
 ```
 
 When debugging, follow the chain in that order.
-

@@ -30,7 +30,7 @@ import JSZip from "jszip";
 import { GeneratedDoc } from "../models/GeneratedDoc.js";
 import { AiChatMessage } from "../models/AiChatMessage.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
-import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled } from "../lib/openai.js";
+import { azureOpenai, azureOpenAiDeployment, isAiProviderEnabled } from "../lib/openai.js";
 import { TECH_MANDATORY_QUESTIONS } from "../lib/launchQuestions.js";
 import { requireRoomAccess, requireRoomOwner } from "../lib/roomAccess.js";
 
@@ -564,8 +564,8 @@ async function getOrCreateDocumentPdf(room: any, docType: string, req: AuthReque
     return { filename, buffer };
   }
 
-  // 2. Generate on the fly using Azure OpenAI
-  if (!isAzureOpenAiEnabled) return null;
+  // 2. Generate on the fly using the configured AI provider
+  if (!isAiProviderEnabled) return null;
 
   const session = await findLaunchSessionForRoom(room);
   const threadId = session ? `launch:${String(session._id)}` : `room:${String(room._id)}`;
