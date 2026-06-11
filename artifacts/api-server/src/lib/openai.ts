@@ -248,14 +248,54 @@ async function generateAzureOpenAiText(options: GenerateAiTextOptions): Promise<
 }
 
 export async function generateAiText(options: GenerateAiTextOptions): Promise<string> {
-  if (!activeAiProvider) {
+  if (!activeAiProvider && !process.env["OPENAI_API_KEY"]) {
     throw new Error(
-      "No AI provider is configured. Set either Azure OpenAI variables or GEMINI_API_KEY. Use AI_PROVIDER to force a provider."
+      "No AI provider is configured. Set OPENAI_API_KEY, Azure OpenAI variables, or GEMINI_API_KEY."
     );
   }
 
+  let geminiError: Error | null = null;
+  
   if (activeAiProvider === "gemini") {
-    return generateGeminiText(options);
+    try {
+      return await generateGeminiText(options);
+    } catch (err) {
+      console.warn("Gemini API failed, attempting fallback to ChatGPT...", err);
+      geminiError = err as Error;
+    }
+  }
+
+  // Fallback to Standard OpenAI if key exists
+  if (process.env["OPENAI_API_KEY"]) {
+    try {
+      const { OpenAI } = await import("openai");
+      const client = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
+      const completion = await client.chat.completions.create({
+        model: "gpt-4o-mini", // fast fallback
+        messages: options.messages,
+        max_completion_tokens: options.maxOutputTokens,
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+      });
+      return completion.choices[0]?.message?.content ?? "";
+    } catch (fallbackErr) {
+      console.error("ChatGPT fallback also failed:", fallbackErr);
+      // If both fail, throw the original Gemini error
+      throw geminiError ?? fallbackErr;
+    }
+  }
+
+  // Fallback to Azure OpenAI if enabled
+  if (isOnlyAzureOpenAiEnabled) {
+    try {
+      return await generateAzureOpenAiText(options);
+    } catch (fallbackErr) {
+       console.error("Azure OpenAI fallback also failed:", fallbackErr);
+       throw geminiError ?? fallbackErr;
+    }
+  }
+
+  if (geminiError) {
+    throw geminiError;
   }
 
   return generateAzureOpenAiText(options);
