@@ -1,5 +1,5 @@
 import { Router, type Response } from "express";
-import { azureOpenai, azureOpenAiDeployment, isAzureOpenAiEnabled, missingAzureOpenAiEnvVars } from "../lib/openai.js";
+import { azureOpenai, azureOpenAiDeployment, isAiProviderEnabled, missingAiProviderEnvVars } from "../lib/openai.js";
 import { GeneratedDoc } from "../models/GeneratedDoc.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
@@ -32,19 +32,19 @@ type ChatThreadContext = {
   room: InstanceType<typeof LiveRoom> | null;
 };
 
-function requireAzureOpenAi(res: Response): boolean {
-  if (isAzureOpenAiEnabled) {
+function requireAiProvider(res: Response): boolean {
+  if (isAiProviderEnabled) {
     return true;
   }
 
   res.status(503).json({
-    error: "Azure OpenAI is not configured",
-    missingEnvVars: missingAzureOpenAiEnvVars,
+    error: "AI provider is not configured",
+    missingEnvVars: missingAiProviderEnvVars,
   });
   return false;
 }
 
-function sendAzureOpenAiError(req: AuthRequest, res: Response, err: unknown, message: string) {
+function sendAiProviderError(req: AuthRequest, res: Response, err: unknown, message: string) {
   req.log.error({ err }, message);
   res.status(502).json({ error: message });
 }
@@ -352,7 +352,7 @@ router.post("/scope", requireAuth, async (req: AuthRequest, res) => {
   const { description } = parsed.data;
   const roomId = typeof req.body.roomId === "string" ? req.body.roomId : "";
 
-  if (!requireAzureOpenAi(res)) {
+  if (!requireAiProvider(res)) {
     return;
   }
 
@@ -428,7 +428,7 @@ Return this exact JSON structure:
     const brief = JSON.parse(cleaned);
     res.json(brief);
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate project scope");
+    sendAiProviderError(req, res, err, "AI provider failed to generate project scope");
   }
 });
 
@@ -522,7 +522,7 @@ router.post("/generate-nda", requireAuth, async (req: AuthRequest, res) => {
       );
     };
 
-    if (!requireAzureOpenAi(res)) {
+    if (!requireAiProvider(res)) {
       return;
     }
 
@@ -565,7 +565,7 @@ Grounding instructions:
     RoomActivity.create({ roomId: String(roomId), type: "nda_generated", meta: { by: req.userId } }).catch(() => {});
     res.json({ _id: saved._id, roomId: saved.roomId, content: saved.content, signedBy: saved.signedBy, status: saved.status, createdAt: saved.createdAt });
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate NDA");
+    sendAiProviderError(req, res, err, "AI provider failed to generate NDA");
   }
 });
 
@@ -577,7 +577,7 @@ router.post("/suggest-milestones", requireAuth, async (req: AuthRequest, res) =>
   }
   const { roomId, totalBudgetUsd } = parsed.data;
 
-  if (!requireAzureOpenAi(res)) {
+  if (!requireAiProvider(res)) {
     return;
   }
 
@@ -625,7 +625,7 @@ Return array of: [{ "title": string, "description": string, "amountUsd": number,
     const suggestions = rebalanceMilestoneAmounts(JSON.parse(cleaned), resolvedBudgetUsd);
     res.json(suggestions);
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to suggest milestones");
+    sendAiProviderError(req, res, err, "AI provider failed to suggest milestones");
   }
 });
 
@@ -661,7 +661,7 @@ router.post("/chat", requireAuth, async (req: AuthRequest, res) => {
     return;
   }
 
-  if (!requireAzureOpenAi(res)) {
+  if (!requireAiProvider(res)) {
     return;
   }
 
@@ -748,7 +748,7 @@ ${savedConversation}`;
       },
     });
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate chat reply");
+    sendAiProviderError(req, res, err, "AI provider failed to generate chat reply");
   }
 });
 
@@ -770,7 +770,7 @@ router.post("/chat-legacy", requireAuth, async (req: AuthRequest, res) => {
     };
   });
 
-  if (!requireAzureOpenAi(res)) {
+  if (!requireAiProvider(res)) {
     return;
   }
 
@@ -818,7 +818,7 @@ Format your response with clear structure when the answer is complex (use number
     const reply = completion.choices[0]?.message?.content ?? "I couldn't process that request.";
     res.json({ reply });
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate chat reply");
+    sendAiProviderError(req, res, err, "AI provider failed to generate chat reply");
   }
 });
 
@@ -831,7 +831,7 @@ router.post("/suggest-tickets", requireAuth, async (req: AuthRequest, res) => {
     if (!(await ensureRoomAccess(req, res, room))) return;
     const brief = room.aiScopedBrief as any;
 
-    if (!requireAzureOpenAi(res)) {
+    if (!requireAiProvider(res)) {
       return;
     }
 
@@ -865,7 +865,7 @@ Return array of: [{ "title": string (concise action), "description": string (1 s
     const tickets = JSON.parse(cleaned);
     res.json(tickets);
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to suggest tickets");
+    sendAiProviderError(req, res, err, "AI provider failed to suggest tickets");
   }
 });
 
@@ -914,7 +914,7 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
 
   const title = `${roomTitle} — ${DOC_TYPE_LABELS[documentType]}`;
 
-  if (!requireAzureOpenAi(res)) {
+  if (!requireAiProvider(res)) {
     return;
   }
 
@@ -950,10 +950,10 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
     });
     content = completion.choices[0]?.message?.content ?? "";
     if (!content) {
-      throw new Error("Empty response from Azure OpenAI");
+      throw new Error("Empty response from AI provider");
     }
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to generate document");
+    sendAiProviderError(req, res, err, "AI provider failed to generate document");
     return;
   }
 
@@ -991,7 +991,7 @@ router.post("/chat-summary", requireAuth, async (req: AuthRequest, res) => {
       .map((m: any) => `${m.isAi ? "AI" : m.userName}: ${m.message}`)
       .join("\n");
 
-    if (!requireAzureOpenAi(res)) {
+    if (!requireAiProvider(res)) {
       return;
     }
 
@@ -1018,7 +1018,7 @@ Project: ${room?.title ?? "Web3 Project"}`;
     const cleaned = content.replace(/```json\n?|\n?```/g, "").trim();
     res.json(JSON.parse(cleaned));
   } catch (err) {
-    sendAzureOpenAiError(req, res, err, "Azure OpenAI failed to summarize conversation");
+    sendAiProviderError(req, res, err, "AI provider failed to summarize conversation");
   }
 });
 
