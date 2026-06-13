@@ -1,4 +1,6 @@
 import puppeteer from "puppeteer";
+import { buildSimplePdf } from "./simplePdf.js";
+import { logger } from "./logger.js";
 
 type Primitive = string | number | boolean;
 
@@ -497,14 +499,30 @@ function baseHtml(meta: ReportMeta, body: string): string {
 </html>`;
 }
 
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function renderPdf(html: string): Promise<Buffer> {
-  const browser = await puppeteer.launch({
-    headless: true,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--font-render-hinting=medium"],
-  });
+  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null;
 
   try {
+    browser = await puppeteer.launch({
+      headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--font-render-hinting=medium"],
+    });
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
     await page.emulateMediaType("print");
@@ -515,8 +533,20 @@ async function renderPdf(html: string): Promise<Buffer> {
       margin: { top: "0", right: "0", bottom: "0", left: "0" },
     });
     return Buffer.from(pdf);
+  } catch (err) {
+    logger.error({ err }, "Puppeteer PDF render failed; falling back to simple PDF");
+    return buildSimplePdf("DEHIX Report", [
+      {
+        text: "Styled PDF rendering failed in this environment, so this fallback PDF contains the report content in a simplified format.",
+        size: 10,
+        gapAfter: 14,
+      },
+      { text: htmlToPlainText(html) },
+    ]);
   } finally {
-    await browser.close();
+    await browser?.close().catch((err) => {
+      logger.warn({ err }, "Failed to close Puppeteer browser");
+    });
   }
 }
 

@@ -391,7 +391,8 @@ export default function LiveRoom() {
   useEffect(() => {
     if (!roomId || !user) return;
     const token = localStorage.getItem("dehix_token");
-    const socket = io(window.location.origin, {
+    const socketUrl = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/+$/, "");
+    const socket = io(socketUrl, {
       auth: { token },
       transports: ["websocket", "polling"],
     });
