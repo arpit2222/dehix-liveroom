@@ -3,12 +3,13 @@ import App from "./App";
 import "./index.css";
 import { setAuthTokenGetter, setUnauthorizedHandler, setBaseUrl } from "@workspace/api-client-react";
 
-setBaseUrl(import.meta.env.VITE_API_URL || null);
+const apiBaseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+
+setBaseUrl(apiBaseUrl || null);
 const originalFetch = window.fetch;
 window.fetch = async (input, init) => {
-  const baseUrl = import.meta.env.VITE_API_URL || "";
   if (typeof input === "string" && input.startsWith("/api/")) {
-    return originalFetch(baseUrl + input, init);
+    return originalFetch(apiBaseUrl + input, init);
   }
   return originalFetch(input, init);
 };
