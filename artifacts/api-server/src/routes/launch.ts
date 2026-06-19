@@ -12,6 +12,9 @@ import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { LaunchSession } from "../models/LaunchSession.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
 import { LiveRoom } from "../models/LiveRoom.js";
+import { RoomRole } from "../models/RoomRole.js";
+import { RoomParticipant } from "../models/RoomParticipant.js";
+import { RoomActivity } from "../models/RoomActivity.js";
 import { SbtCredential } from "../models/SbtCredential.js";
 import { ConfirmPhase1OutputBody, CreateLaunchSessionBody, ScopeLaunchSessionBody } from "@workspace/api-zod";
 
@@ -316,7 +319,75 @@ type RecommendationRole = {
   minReputation: number;
   responsibilities: string[];
   estimatedHours: number;
+  keywords: string[];
 };
+
+type TalentRecommendation = ReturnType<typeof calculateTalentRecommendation>;
+
+type RoleRecommendationGroup = {
+  role: RecommendationRole;
+  availableMatches: TalentRecommendation[];
+  unavailableMatches: TalentRecommendation[];
+  topMatches: TalentRecommendation[];
+};
+
+const ROLE_KEYWORD_GROUPS: Array<{ triggers: string[]; skillDomain: string; keywords: string[] }> = [
+  {
+    triggers: ["ui", "ux", "figma", "designer", "prototype", "wireframe"],
+    skillDomain: "UI/UX Design / Figma / Tailwind",
+    keywords: ["ui", "ux", "ui ux designer", "figma", "wireframes", "prototype", "design system", "tailwind", "responsive"],
+  },
+  {
+    triggers: ["react", "frontend", "front-end", "next", "dashboard", "web app"],
+    skillDomain: "React / Frontend / TypeScript / Tailwind",
+    keywords: ["react", "next.js", "typescript", "tailwind", "frontend", "dashboard", "component library"],
+  },
+  {
+    triggers: ["node", "backend", "api", "server", "express", "mongodb"],
+    skillDomain: "Node.js / Backend / MongoDB / APIs",
+    keywords: ["node.js", "express", "mongodb", "rest api", "backend", "auth", "socket.io"],
+  },
+  {
+    triggers: ["solidity", "smart contract", "evm", "defi", "web3"],
+    skillDomain: "Solidity / Smart Contracts / DeFi",
+    keywords: ["solidity", "smart contracts", "evm", "defi", "hardhat", "foundry", "openzeppelin"],
+  },
+  {
+    triggers: ["zk", "zero knowledge", "cryptography", "circuit", "privacy"],
+    skillDomain: "ZK Proofs / Cryptography / Circuits",
+    keywords: ["zk", "zero knowledge", "circom", "noir", "snark", "cryptography", "privacy"],
+  },
+  {
+    triggers: ["audit", "security", "penetration", "vulnerability"],
+    skillDomain: "Security / Smart Contract Auditing",
+    keywords: ["security", "audit", "slither", "mythril", "foundry", "vulnerability"],
+  },
+  {
+    triggers: ["ai", "ml", "llm", "openai", "rag", "chatbot"],
+    skillDomain: "AI / Machine Learning / LLM Apps",
+    keywords: ["ai", "llm", "openai", "rag", "machine learning", "chatbot", "vector search"],
+  },
+  {
+    triggers: ["devops", "cloud", "aws", "deployment", "docker", "kubernetes"],
+    skillDomain: "DevOps / AWS / Docker / CI/CD",
+    keywords: ["aws", "docker", "kubernetes", "ci cd", "deployment", "terraform", "monitoring"],
+  },
+  {
+    triggers: ["mobile", "ios", "android", "react native"],
+    skillDomain: "Mobile Development / React Native",
+    keywords: ["mobile", "react native", "ios", "android", "app store"],
+  },
+  {
+    triggers: ["product manager", "project manager", "pm", "agile", "roadmap"],
+    skillDomain: "Product Management / Agile / Web3 Delivery",
+    keywords: ["product manager", "agile", "roadmap", "requirements", "sprint", "delivery"],
+  },
+  {
+    triggers: ["qa", "testing", "automation", "playwright"],
+    skillDomain: "QA Automation / Playwright / Testing",
+    keywords: ["qa", "testing", "playwright", "automation", "regression"],
+  },
+];
 
 function clampScore(value: number, min = 0, max = 100): number {
   return Math.max(min, Math.min(max, Math.round(value)));
@@ -330,22 +401,67 @@ function textFromUnknown(value: unknown): string {
   return "";
 }
 
-function inferSkillDomain(text: string): string {
-  const normalized = text.toLowerCase();
-  const skillHints: Array<[string[], string]> = [
-    [["solidity", "smart contract", "evm", "defi", "web3"], "Solidity / Smart Contracts"],
-    [["react", "frontend", "front-end", "dashboard", "ui"], "React / Frontend"],
-    [["node", "backend", "api", "server", "express"], "Node.js / Backend"],
-    [["zk", "zero knowledge", "cryptography", "proof"], "ZK Proofs / Cryptography"],
-    [["ai", "openai", "machine learning", "ml", "llm"], "AI / Machine Learning"],
-    [["mobile", "ios", "android", "react native"], "Mobile Development"],
-    [["design", "ux", "figma", "product designer"], "Product Design / UX"],
-    [["cloud", "devops", "aws", "deployment", "infrastructure"], "Cloud / DevOps"],
-  ];
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
 
-  for (const [needles, label] of skillHints) {
-    if (needles.some((needle) => normalized.includes(needle))) return label;
+function textTokens(value: string): string[] {
+  return normalizeText(value)
+    .split(/\s+/)
+    .filter((token) => token.length > 2);
+}
+
+function rawTextTokens(value: string): string[] {
+  const normalized = normalizeText(value);
+  return normalized ? normalized.split(/\s+/) : [];
+}
+
+function matchesRoleTrigger(text: string, trigger: string): boolean {
+  const normalized = normalizeText(text);
+  const normalizedTrigger = normalizeText(trigger);
+  if (!normalized || !normalizedTrigger) return false;
+  if (normalizedTrigger.includes(" ")) return normalized.includes(normalizedTrigger);
+  if (normalizedTrigger.length <= 3) return rawTextTokens(normalized).includes(normalizedTrigger);
+  return normalized.includes(normalizedTrigger);
+}
+
+function containsSkillTerm(haystack: string, needle: string): boolean {
+  if (!haystack || !needle) return false;
+  if (needle.includes(" ")) return haystack.includes(needle);
+  if (needle.length <= 3) {
+    const tokens = rawTextTokens(haystack);
+    return tokens.some((token) => token === needle || token === `${needle}s`);
   }
+  return haystack.includes(needle);
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const cleaned = value.trim();
+    const key = normalizeText(cleaned);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(cleaned);
+  }
+  return result;
+}
+
+function roleKeywordGroups(text: string) {
+  return ROLE_KEYWORD_GROUPS.filter((group) => group.triggers.some((trigger) => matchesRoleTrigger(text, trigger)));
+}
+
+function extractRoleKeywords(text: string): string[] {
+  const groups = roleKeywordGroups(text);
+  const groupKeywords = groups.flatMap((group) => group.keywords);
+  const tokens = textTokens(text).filter((token) => !["role", "with", "and", "for", "the", "developer", "engineer", "specialist"].includes(token));
+  return dedupeStrings([...groupKeywords, ...tokens]).slice(0, 14);
+}
+
+function inferSkillDomain(text: string): string {
+  const groups = roleKeywordGroups(text);
+  if (groups[0]) return groups[0].skillDomain;
   return "Full Stack Product Development";
 }
 
@@ -393,13 +509,15 @@ function extractRecommendationRoles(blueprint: any): RecommendationRole[] {
   const roles = recommendedTeam.map((role: any, index: number) => {
     const roleTitle = String(role?.role ?? role?.roleTitle ?? `Role ${index + 1}`);
     const roleText = [roleTitle, role?.skillDomain, textFromUnknown(role?.responsibilities)].join(" ");
+    const inferredSkillDomain = String(role?.skillDomain ?? inferSkillDomain(roleText));
     return {
       roleTitle,
-      skillDomain: String(role?.skillDomain ?? inferSkillDomain(roleText)),
+      skillDomain: inferredSkillDomain,
       requiredLevel: role?.requiredLevel === 2 ? 2 : 1,
       minReputation: Number(role?.minReputation ?? 500),
       responsibilities: asStringArray(role?.responsibilities).slice(0, 4),
       estimatedHours: Number(role?.estimatedHours ?? 120),
+      keywords: extractRoleKeywords(`${roleText} ${inferredSkillDomain}`),
     } as RecommendationRole;
   });
 
@@ -413,23 +531,83 @@ function extractRecommendationRoles(blueprint: any): RecommendationRole[] {
     minReputation: 500,
     responsibilities: ["Build the first usable version", "Work from the generated blueprint"],
     estimatedHours: 160,
+    keywords: extractRoleKeywords(fallbackText),
   }];
 }
 
 function skillSimilarity(requiredSkill: string, actualSkill: string): number {
-  const required = requiredSkill.toLowerCase();
-  const actual = actualSkill.toLowerCase();
+  const required = normalizeText(requiredSkill);
+  const actual = normalizeText(actualSkill);
+  if (!required || !actual) return 0;
   if (required === actual) return 100;
-  if (required.includes(actual) || actual.includes(required)) return 90;
+  if (containsSkillTerm(actual, required) || containsSkillTerm(required, actual)) return 90;
 
-  const requiredTokens = required.split(/[^a-z0-9]+/).filter((token) => token.length > 2);
-  const actualTokens = new Set(actual.split(/[^a-z0-9]+/).filter((token) => token.length > 2));
-  if (requiredTokens.length === 0) return 40;
+  const requiredTokens = textTokens(required);
+  const actualTokens = new Set(textTokens(actual));
+  if (requiredTokens.length === 0) return 0;
   const shared = requiredTokens.filter((token) => actualTokens.has(token)).length;
-  return clampScore((shared / requiredTokens.length) * 85, 25, 85);
+  if (shared === 0) return 0;
+  return clampScore((shared / requiredTokens.length) * 85, 0, 85);
+}
+
+function profileTextForCredential(credential: any): string {
+  const user = credential.userId as any;
+  return [
+    credential.skillDomain,
+    credential.embeddingText,
+    user?.name,
+    user?.location,
+  ].filter(Boolean).join(" ");
+}
+
+function calculateKeywordMatch(role: RecommendationRole, credential: any) {
+  const profileText = profileTextForCredential(credential);
+  const keywords = role.keywords.length > 0 ? role.keywords : [role.skillDomain];
+  const matchedKeywords = keywords.filter((keyword) => skillSimilarity(keyword, profileText) >= 55);
+  const missingKeywords = keywords.filter((keyword) => !matchedKeywords.includes(keyword));
+  const coverageScore = keywords.length > 0 ? (matchedKeywords.length / keywords.length) * 100 : 0;
+  const domainScore = skillSimilarity(role.skillDomain, profileText);
+  const skillMatchScore = clampScore(coverageScore * 0.75 + domainScore * 0.25);
+  return { skillMatchScore, matchedKeywords, missingKeywords };
+}
+
+function availabilityRank(user: any): number {
+  if (user?.isOnline && user?.availability !== "unavailable") return 4;
+  switch (user?.availability) {
+    case "available":
+      return 3;
+    case "part_time":
+    case "available_soon":
+      return 2;
+    case "busy":
+    case "unknown":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function availabilityLabel(user: any): string {
+  if (user?.isOnline && user?.availability !== "unavailable") return "Available now";
+  switch (user?.availability) {
+    case "available":
+      return "Available";
+    case "part_time":
+      return "Part-time available";
+    case "available_soon":
+      return "Available soon";
+    case "busy":
+      return "Busy right now";
+    case "unavailable":
+      return "Not available right now";
+    default:
+      return "Availability unknown";
+  }
 }
 
 function estimateHourlyRateUsd(credential: any): number {
+  const user = credential.userId as any;
+  if (Number(user?.hourlyRate) > 0) return Math.round(Number(user.hourlyRate));
   const reputation = Number(credential.reputationScore ?? 0) / 1000;
   const github = Number(credential.githubScore ?? 0) / 100;
   const projects = Number(credential.projectsCompleted ?? 0);
@@ -453,18 +631,20 @@ function calculateTalentRecommendation(role: RecommendationRole, credential: any
   const openSourceScore = clampScore(Number(credential.githubScore ?? 0));
   const previousWorkScore = clampScore(Number(credential.projectsCompleted ?? 0) * 7 + Number(credential.interviewScore ?? 0) * 0.35);
   const talentScore = clampScore(reputationScore * 0.4 + previousWorkScore * 0.3 + openSourceScore * 0.3);
-  const skillMatchScore = skillSimilarity(role.skillDomain, credential.skillDomain);
-  const availabilityScore = user?.isOnline === false ? 45 : 95;
+  const { skillMatchScore, matchedKeywords, missingKeywords } = calculateKeywordMatch(role, credential);
+  const availabilityScore = clampScore(availabilityRank(user) * 25);
   const levelScore = credential.level >= role.requiredLevel ? 100 : 55;
   const estimatedHourlyRateUsd = estimateHourlyRateUsd(credential);
+  const weeklyRateUsd = Number(user?.weeklyRate ?? estimatedHourlyRateUsd * 40);
+  const monthlyRateUsd = Number(user?.monthlyRate ?? weeklyRateUsd * 4);
   const estimatedProjectCostUsd = estimatedHourlyRateUsd * role.estimatedHours;
   const budgetFitScore = calculateBudgetFitScore(projectBudgetUsd, estimatedProjectCostUsd, roleCount);
   const finalScore = clampScore(
-    talentScore * 0.4 + skillMatchScore * 0.25 + budgetFitScore * 0.2 + availabilityScore * 0.1 + levelScore * 0.05
+    skillMatchScore * 0.34 + talentScore * 0.24 + budgetFitScore * 0.16 + availabilityScore * 0.16 + levelScore * 0.1
   );
 
   const reasons = [
-    `${skillMatchScore}% skill match for ${role.skillDomain}`,
+    `${skillMatchScore}% keyword match for ${role.roleTitle}`,
     `${reputationScore}% reputation strength from verified credentials`,
     `${openSourceScore}% open-source signal from GitHub score`,
     `${previousWorkScore}% previous-work signal from completed projects and interview score`,
@@ -472,9 +652,7 @@ function calculateTalentRecommendation(role: RecommendationRole, credential: any
   if (projectBudgetUsd) {
     reasons.push(`${budgetFitScore}% budget fit against the estimated role budget`);
   }
-  if (user?.isOnline !== false) {
-    reasons.push("Currently available on the platform");
-  }
+  reasons.push(availabilityLabel(user));
 
   return {
     talentId: user?._id,
@@ -485,6 +663,12 @@ function calculateTalentRecommendation(role: RecommendationRole, credential: any
       avatarUrl: user?.avatarUrl ?? null,
       walletAddress: user?.walletAddress ?? null,
       isOnline: user?.isOnline ?? false,
+      availability: user?.availability ?? "unknown",
+      availabilityLabel: availabilityLabel(user),
+      availabilityRank: availabilityRank(user),
+      location: user?.location ?? null,
+      rating: user?.rating ?? null,
+      completedProjects: user?.completedProjects ?? credential.projectsCompleted ?? 0,
     },
     matchedRole: role,
     credential: {
@@ -507,7 +691,11 @@ function calculateTalentRecommendation(role: RecommendationRole, credential: any
       previousWorkScore,
       reputationScore,
     },
+    matchedKeywords,
+    missingKeywords,
     estimatedHourlyRateUsd,
+    weeklyRateUsd,
+    monthlyRateUsd,
     estimatedProjectCostUsd,
     reasons,
   };
@@ -1060,31 +1248,48 @@ router.post("/:id/talent-recommendations", requireAuth, async (req: AuthRequest,
     const roles = extractRecommendationRoles(blueprint).slice(0, 8);
     const budgetUsd = extractBudgetUsd(blueprint);
     const credentials = await SbtCredential.find({ status: "verified" })
-      .populate("userId", "name email avatarUrl walletAddress isOnline role createdAt")
+      .populate("userId", "name email avatarUrl walletAddress isOnline role createdAt availability hourlyRate weeklyRate monthlyRate location rating completedProjects accountStatus profileCompleted")
       .sort({ reputationScore: -1 })
       .limit(250);
 
-    const candidates = credentials
-      .filter((credential: any) => {
-        const user = credential.userId as any;
-        return user?.role === "talent";
-      })
-      .flatMap((credential: any) => roles.map((role) => calculateTalentRecommendation(role, credential, budgetUsd, roles.length)))
-      .filter((candidate: any) => candidate.talentId && candidate.scoreBreakdown.skillMatchScore >= 35)
-      .sort((a: any, b: any) => b.finalScore - a.finalScore);
+    const eligibleCredentials = credentials.filter((credential: any) => {
+      const user = credential.userId as any;
+      return user?.role === "talent" && user?.accountStatus !== "blocked" && user?.accountStatus !== "suspended" && user?.profileCompleted !== false;
+    });
 
-    const diversified = new Map<string, any>();
-    for (const candidate of candidates) {
-      const key = `${candidate.talentId}:${candidate.matchedRole.roleTitle}`;
-      if (!diversified.has(key)) diversified.set(key, candidate);
-    }
+    const recommendedTeams: RoleRecommendationGroup[] = roles.map((role) => {
+      const bestByTalent = new Map<string, TalentRecommendation>();
+      for (const credential of eligibleCredentials) {
+        const candidate = calculateTalentRecommendation(role, credential, budgetUsd, roles.length);
+        if (!candidate.talentId || candidate.scoreBreakdown.skillMatchScore < 18) continue;
+        const key = String(candidate.talentId);
+        const previous = bestByTalent.get(key);
+        if (!previous || candidate.finalScore > previous.finalScore) {
+          bestByTalent.set(key, candidate);
+        }
+      }
+      const topMatches = [...bestByTalent.values()]
+        .sort((a: any, b: any) => {
+          const availabilityDiff = Number(b.user.availabilityRank ?? 0) - Number(a.user.availabilityRank ?? 0);
+          if (availabilityDiff !== 0) return availabilityDiff;
+          return Number(b.finalScore ?? 0) - Number(a.finalScore ?? 0);
+        })
+        .slice(0, 8);
+      return {
+        role,
+        availableMatches: topMatches.filter((candidate: any) => Number(candidate.user.availabilityRank ?? 0) >= 2),
+        unavailableMatches: topMatches.filter((candidate: any) => Number(candidate.user.availabilityRank ?? 0) < 2),
+        topMatches,
+      };
+    });
 
-    const recommendations = [...diversified.values()].slice(0, 12);
+    const recommendations = recommendedTeams.flatMap((group) => group.topMatches);
     const payload = {
       step: "talent_recommendations",
       budgetUsd: budgetUsd ?? null,
       roleCount: roles.length,
       roles,
+      recommendedTeams,
       recommendations,
       generatedAt: new Date().toISOString(),
     };
@@ -1173,6 +1378,9 @@ router.post("/:id/scope", requireAuth, async (req: AuthRequest, res) => {
     const businessAnalysis = ensureDefaultRegion(session.researchText ? JSON.parse(session.researchText) : {});
     const businessBlueprint = session.technicalDocText ? JSON.parse(session.technicalDocText) : null;
     const talentRecommendationReport = session.businessDocText ? JSON.parse(session.businessDocText) : null;
+    const selectedTalentRecommendations = Array.isArray(req.body?.selectedTalentRecommendations)
+      ? req.body.selectedTalentRecommendations.slice(0, 20)
+      : [];
     const fullDescription = `Original Idea:\n${session.rawIdea}
 
 Business Validation:
@@ -1250,11 +1458,55 @@ Return this exact JSON structure:
         launchSessionId: String(session._id),
         businessValidation: businessAnalysis,
         businessBlueprint,
+        selectedTalentRecommendations,
+        talentRecommendedTeams: talentRecommendationReport?.recommendedTeams ?? [],
         talentRecommendations: talentRecommendationReport?.recommendations ?? [],
         talentRecommendationBudgetUsd: talentRecommendationReport?.budgetUsd ?? null,
       },
       status: "scoping",
     });
+
+    const roleDocs = Array.isArray(brief?.roles)
+      ? await RoomRole.insertMany(
+          brief.roles.map((role: any) => ({
+            roomId: room._id,
+            roleTitle: String(role?.roleTitle ?? role?.role ?? "Project Role"),
+            skillDomain: String(role?.skillDomain ?? inferSkillDomain(textFromUnknown(role))),
+            requiredLevel: role?.requiredLevel === 2 ? 2 : 1,
+            minReputation: Number(role?.minReputation ?? 500),
+            status: "open",
+          }))
+        )
+      : [];
+
+    const roleByTitle = new Map(roleDocs.map((role) => [role.roleTitle.toLowerCase(), role]));
+    const selectedKeys = new Set<string>();
+    for (const selected of selectedTalentRecommendations) {
+      const talentId = selected?.talentId ?? selected?.user?._id;
+      const roleTitle = String(selected?.matchedRole?.roleTitle ?? selected?.role?.roleTitle ?? "");
+      if (!talentId || !roleTitle) continue;
+      const role = roleByTitle.get(roleTitle.toLowerCase());
+      if (!role) continue;
+      const key = `${talentId}:${String(role._id)}`;
+      if (selectedKeys.has(key)) continue;
+      selectedKeys.add(key);
+      await RoomParticipant.findOneAndUpdate(
+        { roomId: room._id, userId: talentId },
+        { roomId: room._id, userId: talentId, roleId: role._id, status: "invited" },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      role.status = "invited";
+      await role.save();
+    }
+
+    if (selectedKeys.size > 0) {
+      RoomActivity.create({
+        roomId: room._id,
+        type: "participant_invited",
+        actorId: req.userId,
+        meta: { selectedFromPhase4: selectedKeys.size },
+      }).catch(() => {});
+    }
 
     session.status = "approved";
     await session.save();

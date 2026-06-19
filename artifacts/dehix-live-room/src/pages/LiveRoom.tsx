@@ -26,6 +26,44 @@ import {
 
 type TabKey = "brief" | "tickets" | "milestones" | "nda" | "activity";
 
+type FreelancerMatch = {
+  matchId: string;
+  roleId: string;
+  role: string;
+  freelancerId: string;
+  name: string;
+  email?: string | null;
+  avatarUrl?: string | null;
+  availability?: string;
+  presenceStatus: "online" | "offline";
+  isOnline: boolean;
+  matchScore: number;
+  matchedSkills: string[];
+  missingSkills: string[];
+  status: "recommended" | "shortlisted" | "enquired" | "hired" | "dismissed";
+};
+
+type RecommendedRoleMatches = {
+  roleId: string;
+  role: string;
+  skillDomain: string;
+  quantityRequired: number;
+  topMatches: FreelancerMatch[];
+};
+
+type EnquiryStatus = {
+  _id: string;
+  roleId?: string | null;
+  role: string;
+  freelancerId: string;
+  name: string;
+  matchScore?: number | null;
+  emailStatus: string;
+  notificationStatus: string;
+  responseStatus: string;
+  sentAt: string;
+};
+
 const ACTIVITY_LABELS: Record<string, string> = {
   room_created: "Room created",
   status_changed: "Status changed",
@@ -40,6 +78,11 @@ const ACTIVITY_LABELS: Record<string, string> = {
   milestone_submitted: "Milestone submitted",
   ticket_created: "Ticket created",
   notes_updated: "Notes updated",
+  freelancer_matches_generated: "Freelancer matches generated",
+  freelancer_shortlisted: "Freelancer shortlisted",
+  freelancer_enquiry_sent: "Freelancer enquiry sent",
+  freelancer_enquiry_responded: "Freelancer responded",
+  freelancer_hired: "Freelancer hired",
   room_contracted: "Room contracted",
   room_closed: "Room closed",
 };
@@ -58,6 +101,11 @@ const ACTIVITY_ICONS: Record<string, string> = {
   milestone_submitted: "📬",
   ticket_created: "🎫",
   notes_updated: "📝",
+  freelancer_matches_generated: "F",
+  freelancer_shortlisted: "F",
+  freelancer_enquiry_sent: "F",
+  freelancer_enquiry_responded: "F",
+  freelancer_hired: "F",
   room_contracted: "🤝",
   room_closed: "🔒",
 };
@@ -251,7 +299,14 @@ export default function LiveRoom() {
   const [approvingMilestone, setApprovingMilestone] = useState<string | null>(null);
   const [submittingMilestone, setSubmittingMilestone] = useState<string | null>(null);
   const [matchingTalent, setMatchingTalent] = useState(false);
-  const [matchResults, setMatchResults] = useState<any[]>([]);
+  const [freelancerMatches, setFreelancerMatches] = useState<RecommendedRoleMatches[]>([]);
+  const [loadingFreelancerMatches, setLoadingFreelancerMatches] = useState(false);
+  const [selectedMatchKeys, setSelectedMatchKeys] = useState<Record<string, boolean>>({});
+  const [shortlistLoadingKey, setShortlistLoadingKey] = useState<string | null>(null);
+  const [enquiryLoading, setEnquiryLoading] = useState<"top" | "selected" | null>(null);
+  const [enquiryMessage, setEnquiryMessage] = useState("We liked your profile and want to discuss this project.");
+  const [enquiryStatuses, setEnquiryStatuses] = useState<EnquiryStatus[]>([]);
+  const [hireLoadingKey, setHireLoadingKey] = useState<string | null>(null);
   const [suggestingTickets, setSuggestingTickets] = useState(false);
   const [statusDropdown, setStatusDropdown] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
@@ -346,11 +401,11 @@ export default function LiveRoom() {
         body: JSON.stringify({ message, roomId }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Azure OpenAI request failed");
+      if (!res.ok) throw new Error(data.error ?? "AI request failed");
       const aiMsg = data.message ?? { userId: "ai", userName: "DEHIX AI", message: data.reply ?? "I couldn't process that.", isAi: true };
       addLocalMessage(aiMsg);
     } catch (e: any) {
-      addLocalMessage({ userId: "ai", userName: "DEHIX AI", message: e.message ?? "Azure OpenAI request failed", isAi: true });
+      addLocalMessage({ userId: "ai", userName: "DEHIX AI", message: e.message ?? "AI request failed", isAi: true });
     } finally {
       setAiLoading(false);
     }
@@ -410,6 +465,9 @@ export default function LiveRoom() {
     socket.on("room:meet_link_updated", () => { queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }); });
     socket.on("room:notes_updated", () => { queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }); });
     socket.on("room:participant_removed", () => { queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) }); toast.info("A participant was removed from the room"); });
+    socket.on("room:freelancer_matches_generated", () => loadFreelancerMatches());
+    socket.on("room:freelancer_enquiry_sent", () => loadEnquiryStatuses());
+    socket.on("room:freelancer_enquiry_responded", () => loadEnquiryStatuses());
     return () => { socket.disconnect(); };
   }, [roomId, user]);
 
@@ -582,32 +640,161 @@ export default function LiveRoom() {
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
+  async function loadFreelancerMatches() {
+    if (!roomId) return;
+    setLoadingFreelancerMatches(true);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const res = await fetch(`/api/rooms/${roomId}/freelancer-matches`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to load freelancer matches");
+      setFreelancerMatches(Array.isArray(data.recommendedTeam) ? data.recommendedTeam : []);
+    } catch {
+      setFreelancerMatches([]);
+    } finally {
+      setLoadingFreelancerMatches(false);
+    }
+  }
+
+  async function loadEnquiryStatuses() {
+    if (!roomId || user?.role !== "business") return;
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const res = await fetch(`/api/rooms/${roomId}/enquiries`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) setEnquiryStatuses(Array.isArray(data.enquiries) ? data.enquiries : []);
+    } catch {
+      setEnquiryStatuses([]);
+    }
+  }
+
   const matchTalentForRoom = async () => {
     if (!roomId || matchingTalent) return;
     setMatchingTalent(true);
-    setMatchResults([]);
+    setSelectedMatchKeys({});
     try {
       const token = localStorage.getItem("dehix_token");
-      const room = roomData as any;
-      const roles: any[] = room?.brief?.roles ?? [];
-      if (roles.length === 0) { toast.info("Generate an AI brief first to get role requirements"); setMatchingTalent(false); return; }
-      const firstRole = roles[0];
-      const res = await fetch("/api/ai/match", {
+      const res = await fetch(`/api/rooms/${roomId}/freelancer-matches`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ roleTitle: firstRole.roleTitle, skillDomain: firstRole.skillDomain, requiredLevel: firstRole.requiredLevel ?? 1, minReputation: firstRole.minReputation ?? 0 }),
+        body: JSON.stringify({ topK: 5 }),
       });
-      if (!res.ok) throw new Error("Match failed");
       const data = await res.json();
-      setMatchResults(Array.isArray(data) ? data : []);
-      if (data.length === 0) toast.info("No matching talent found yet");
-      else toast.success(`${data.length} matching candidate${data.length !== 1 ? "s" : ""} found`);
+      if (!res.ok) throw new Error(data.error ?? "Match failed");
+      const recommendedTeam = Array.isArray(data.recommendedTeam) ? data.recommendedTeam : [];
+      setFreelancerMatches(recommendedTeam);
+      const count = recommendedTeam.reduce((sum: number, role: RecommendedRoleMatches) => sum + role.topMatches.length, 0);
+      if (count === 0) toast.info("No matching freelancers found yet");
+      else toast.success(`${count} freelancer match${count !== 1 ? "es" : ""} saved`);
+      loadEnquiryStatuses();
     } catch (e: any) {
-      toast.error(e.message ?? "Failed to match talent");
+      toast.error(e.message ?? "Failed to match freelancers");
     } finally {
       setMatchingTalent(false);
     }
   };
+
+  const matchKey = (match: FreelancerMatch) => `${match.roleId}:${match.freelancerId}`;
+
+  const updateMatchStatus = (key: string, status: FreelancerMatch["status"]) => {
+    setFreelancerMatches((prev) => prev.map((role) => ({
+      ...role,
+      topMatches: role.topMatches.map((match) => matchKey(match) === key ? { ...match, status } : match),
+    })));
+  };
+
+  const shortlistFreelancer = async (match: FreelancerMatch) => {
+    const key = matchKey(match);
+    setShortlistLoadingKey(key);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const res = await fetch(`/api/rooms/${roomId}/shortlist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ freelancerId: match.freelancerId, roleId: match.roleId, role: match.role }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to shortlist freelancer");
+      updateMatchStatus(key, "shortlisted");
+      toast.success("Freelancer shortlisted");
+    } catch (e: any) {
+      toast.error(e.message ?? "Failed to shortlist freelancer");
+    } finally {
+      setShortlistLoadingKey(null);
+    }
+  };
+
+  const sendEnquiry = async (mode: "top" | "selected") => {
+    if (!roomId || enquiryLoading) return;
+    const selected = freelancerMatches
+      .flatMap((role) => role.topMatches)
+      .filter((match) => selectedMatchKeys[matchKey(match)]);
+    if (mode === "selected" && selected.length === 0) {
+      toast.info("Select at least one freelancer");
+      return;
+    }
+    setEnquiryLoading(mode);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const endpoint = mode === "top"
+        ? `/api/rooms/${roomId}/enquiries/top-freelancers`
+        : `/api/rooms/${roomId}/enquiries/selected-freelancers`;
+      const body = mode === "top"
+        ? { topK: 3, message: enquiryMessage, sendEmailToOffline: true }
+        : {
+            freelancers: selected.map((match) => ({ freelancerId: match.freelancerId, roleId: match.roleId, role: match.role })),
+            message: enquiryMessage,
+            sendEmailToOffline: true,
+          };
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to send enquiries");
+      toast.success(`${data.sentCount ?? 0} enquiry${data.sentCount === 1 ? "" : "ies"} sent`);
+      setSelectedMatchKeys({});
+      await Promise.all([loadFreelancerMatches(), loadEnquiryStatuses()]);
+    } catch (e: any) {
+      toast.error(e.message ?? "Failed to send enquiries");
+    } finally {
+      setEnquiryLoading(null);
+    }
+  };
+
+  const hireFreelancer = async (match: FreelancerMatch) => {
+    const key = matchKey(match);
+    setHireLoadingKey(key);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const res = await fetch(`/api/rooms/${roomId}/hire`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ freelancerId: match.freelancerId, roleId: match.roleId, role: match.role }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to hire freelancer");
+      updateMatchStatus(key, "hired");
+      queryClient.invalidateQueries({ queryKey: getGetRoomQueryKey(roomId) });
+      toast.success("Freelancer hired for this role");
+    } catch (e: any) {
+      toast.error(e.message ?? "Failed to hire freelancer");
+    } finally {
+      setHireLoadingKey(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!roomId || !isAuthenticated) return;
+    loadFreelancerMatches();
+    loadEnquiryStatuses();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, isAuthenticated, user?.role]);
 
   const suggestMilestones = async () => {
     if (!roomId || suggestingMilestones) return;
@@ -823,6 +1010,11 @@ export default function LiveRoom() {
   const isOwner = isBusiness;
   const allRolesFilled = roles.length > 0 && roles.every((r: any) => ["filled", "accepted"].includes(r.status));
   const isSignedByMe = nda?.signedBy?.includes(user?._id ?? "");
+  const enquiryByTalentRole = new Map(
+    enquiryStatuses.map((status) => [`${status.roleId ?? ""}:${status.freelancerId}`, status])
+  );
+  const selectedMatchCount = Object.values(selectedMatchKeys).filter(Boolean).length;
+  const savedMatchCount = freelancerMatches.reduce((sum, role) => sum + role.topMatches.length, 0);
 
   return (
     <>
@@ -1371,43 +1563,155 @@ export default function LiveRoom() {
                       </div>
                     )}
 
-                    {isBusiness && brief.roles?.length > 0 && (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between border-b border-border/20 pb-2">
-                          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">AI Talent Match Engine</div>
+                    {isBusiness && roles.length > 0 && (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between gap-3 border-b border-border/20 pb-2">
+                          <div>
+                            <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Recommended Freelancers</div>
+                            <div className="text-[11px] text-muted-foreground/70 mt-0.5">
+                              {savedMatchCount > 0 ? `${savedMatchCount} saved match${savedMatchCount !== 1 ? "es" : ""}` : "Generate role-wise matches from verified platform profiles"}
+                            </div>
+                          </div>
                           <button
                             onClick={matchTalentForRoom}
-                            disabled={matchingTalent}
-                            className="text-xs font-semibold text-primary hover:text-indigo-400 transition-colors disabled:opacity-50 flex items-center gap-1"
+                            disabled={matchingTalent || loadingFreelancerMatches}
+                            className="text-xs font-semibold text-primary hover:text-indigo-400 transition-colors disabled:opacity-50 flex items-center gap-1 shrink-0"
                           >
                             {matchingTalent ? (
-                              <><span className="w-3.5 h-3.5 rounded-full border border-primary/30 border-t-primary animate-spin inline-block" /> Matching Candidates...</>
+                              <><span className="w-3.5 h-3.5 rounded-full border border-primary/30 border-t-primary animate-spin inline-block" /> Finding...</>
                             ) : (
-                              <><Sparkles className="h-3.5 w-3.5" /> Search candidates</>
+                              <><Sparkles className="h-3.5 w-3.5" /> Find freelancers</>
                             )}
                           </button>
                         </div>
-                        {matchResults.length > 0 && (
-                          <div className="grid gap-2.5 sm:grid-cols-2">
-                            {matchResults.map((m: any) => (
-                              <div key={m.user._id} className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 flex items-center justify-between gap-3 hover:border-primary/45 hover:bg-primary/10 transition-all shadow-sm">
-                                <div className="min-w-0">
-                                  <div className="text-xs font-bold text-foreground/90">{m.user.name}</div>
-                                  <div className="text-[10px] font-semibold text-primary mt-0.5 truncate">{m.credential?.skillDomain}</div>
-                                </div>
-                                <div className="flex items-center gap-2.5 shrink-0">
-                                  <span className="text-[10px] font-mono text-muted-foreground/80 bg-background/50 border border-border/30 px-2 py-0.5 rounded-md">{m.credential?.reputationScore} rep</span>
-                                  <button
-                                    onClick={() => navigate(`/talent/profile/${m.user._id}`)}
-                                    className="text-[10px] font-bold text-primary hover:underline"
-                                  >
-                                    Profile →
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
+
+                        {savedMatchCount > 0 && (
+                          <div className="rounded-xl border border-border/35 bg-card/25 p-3 space-y-3">
+                            <textarea
+                              value={enquiryMessage}
+                              onChange={(e) => setEnquiryMessage(e.target.value)}
+                              rows={2}
+                              className="w-full resize-none bg-background/65 border border-border/45 rounded-lg px-3 py-2 text-xs outline-none focus:border-primary/55"
+                            />
+                            <div className="flex flex-wrap gap-2">
+                              <Button size="sm" onClick={() => sendEnquiry("top")} disabled={!!enquiryLoading}>
+                                <Send className="h-3.5 w-3.5 mr-1.5" />
+                                {enquiryLoading === "top" ? "Sending..." : "Enquire top 3"}
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => sendEnquiry("selected")} disabled={!!enquiryLoading || selectedMatchCount === 0}>
+                                <ClipboardCheck className="h-3.5 w-3.5 mr-1.5" />
+                                {enquiryLoading === "selected" ? "Sending..." : `Enquire selected (${selectedMatchCount})`}
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={loadEnquiryStatuses}>
+                                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                                Status
+                              </Button>
+                            </div>
                           </div>
                         )}
+
+                        {loadingFreelancerMatches && savedMatchCount === 0 && (
+                          <div className="rounded-xl border border-dashed border-border/45 p-6 text-center text-xs text-muted-foreground">
+                            Loading saved freelancer matches...
+                          </div>
+                        )}
+
+                        {!loadingFreelancerMatches && savedMatchCount === 0 && (
+                          <div className="rounded-xl border border-dashed border-border/45 p-6 text-center">
+                            <Search className="h-5 w-5 mx-auto text-muted-foreground/60 mb-2" />
+                            <p className="text-xs text-muted-foreground">No saved freelancer matches yet</p>
+                          </div>
+                        )}
+
+                        {freelancerMatches.map((roleGroup) => (
+                          <div key={roleGroup.roleId} className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="text-xs font-bold text-foreground/90">{roleGroup.role}</div>
+                                <div className="text-[10px] text-primary/80">{roleGroup.skillDomain}</div>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground border border-border/35 rounded-md px-2 py-0.5">
+                                {roleGroup.topMatches.length} match{roleGroup.topMatches.length !== 1 ? "es" : ""}
+                              </span>
+                            </div>
+                            <div className="grid gap-2.5">
+                              {roleGroup.topMatches.map((match) => {
+                                const key = matchKey(match);
+                                const enquiry = enquiryByTalentRole.get(key);
+                                return (
+                                  <div key={key} className="rounded-xl border border-border/40 bg-background/45 px-4 py-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <button
+                                        onClick={() => setSelectedMatchKeys((prev) => ({ ...prev, [key]: !prev[key] }))}
+                                        className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${selectedMatchKeys[key] ? "bg-primary border-primary text-primary-foreground" : "border-border/60"}`}
+                                        title="Select freelancer"
+                                      >
+                                        {selectedMatchKeys[key] ? <CheckCircle className="h-3 w-3" /> : null}
+                                      </button>
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <span className="text-xs font-bold text-foreground/90">{match.name}</span>
+                                          <span className={`text-[10px] rounded-full px-1.5 py-0.5 border ${match.isOnline ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-500" : "border-border/40 text-muted-foreground"}`}>
+                                            {match.presenceStatus}
+                                          </span>
+                                          <span className="text-[10px] rounded-full px-1.5 py-0.5 border border-primary/20 bg-primary/10 text-primary">
+                                            {match.matchScore}% match
+                                          </span>
+                                          <span className="text-[10px] rounded-full px-1.5 py-0.5 border border-border/35 text-muted-foreground capitalize">
+                                            {match.status}
+                                          </span>
+                                        </div>
+                                        {match.matchedSkills.length > 0 && (
+                                          <div className="mt-2 flex flex-wrap gap-1">
+                                            {match.matchedSkills.slice(0, 4).map((skill) => (
+                                              <span key={skill} className="text-[10px] border border-emerald-500/20 bg-emerald-500/10 text-emerald-500 rounded px-1.5 py-0.5">
+                                                {skill}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        )}
+                                        {match.missingSkills.length > 0 && (
+                                          <div className="mt-1 text-[10px] text-muted-foreground/60">
+                                            Missing: {match.missingSkills.slice(0, 3).join(", ")}
+                                          </div>
+                                        )}
+                                        {enquiry && (
+                                          <div className="mt-2 text-[10px] text-muted-foreground/80">
+                                            Enquiry: <span className="capitalize text-foreground/80">{enquiry.responseStatus.replace(/_/g, " ")}</span>
+                                            <span className="mx-1 text-border/50">/</span>
+                                            Email {enquiry.emailStatus}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="flex flex-col gap-1.5 shrink-0">
+                                        <button
+                                          onClick={() => navigate(`/talent/profile/${match.freelancerId}`)}
+                                          className="text-[10px] font-bold text-primary hover:underline text-right"
+                                        >
+                                          Profile
+                                        </button>
+                                        <button
+                                          onClick={() => shortlistFreelancer(match)}
+                                          disabled={shortlistLoadingKey === key || match.status === "shortlisted" || match.status === "hired"}
+                                          className="text-[10px] font-bold text-foreground/80 hover:text-primary disabled:opacity-50 text-right"
+                                        >
+                                          {match.status === "shortlisted" ? "Shortlisted" : shortlistLoadingKey === key ? "Saving..." : "Shortlist"}
+                                        </button>
+                                        <button
+                                          onClick={() => hireFreelancer(match)}
+                                          disabled={hireLoadingKey === key || match.status === "hired"}
+                                          className="text-[10px] font-bold text-emerald-500 hover:text-emerald-400 disabled:opacity-50 text-right"
+                                        >
+                                          {match.status === "hired" ? "Hired" : hireLoadingKey === key ? "Hiring..." : "Hire"}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </>
