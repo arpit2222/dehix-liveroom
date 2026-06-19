@@ -6,6 +6,8 @@ import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
 import { Milestone } from "../models/Milestone.js";
 import { RoomActivity } from "../models/RoomActivity.js";
+import { ProjectEnquiry } from "../models/ProjectEnquiry.js";
+import { ProjectEnquiryRecipient } from "../models/ProjectEnquiryRecipient.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { UpdateAvailabilityBody, RespondInviteBody } from "@workspace/api-zod";
 import { getIo } from "../socket.js";
@@ -44,6 +46,14 @@ router.get("/search", async (req, res) => {
           avatarUrl: user.avatarUrl ?? null,
           walletAddress: user.walletAddress ?? null,
           isOnline: user.isOnline,
+          availability: user.availability ?? "unknown",
+          availabilityRank: talentAvailabilityRank(user),
+          hourlyRate: user.hourlyRate ?? null,
+          weeklyRate: user.weeklyRate ?? null,
+          monthlyRate: user.monthlyRate ?? null,
+          rating: user.rating ?? null,
+          completedProjects: user.completedProjects ?? null,
+          location: user.location ?? null,
           createdAt: user.createdAt,
         },
         overallReputation: overallRep,
@@ -51,6 +61,11 @@ router.get("/search", async (req, res) => {
         primarySkill: c.skillDomain,
       });
     }
+    results.sort((a, b) => {
+      const availabilityDiff = Number(b.user.availabilityRank ?? 0) - Number(a.user.availabilityRank ?? 0);
+      if (availabilityDiff !== 0) return availabilityDiff;
+      return Number(b.overallReputation ?? 0) - Number(a.overallReputation ?? 0);
+    });
     res.json(results);
   } catch (err) {
     res.status(500).json({ error: "Talent search failed" });
@@ -214,6 +229,75 @@ router.get("/rooms", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+router.get("/enquiries", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const recipients = await ProjectEnquiryRecipient.find({ freelancerId: req.userId })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    const roomIds = [...new Set(recipients.map((recipient) => String(recipient.roomId)))];
+    const roleIds = [...new Set(recipients.map((recipient) => recipient.roleId ? String(recipient.roleId) : "").filter(Boolean))];
+    const enquiryIds = [...new Set(recipients.map((recipient) => String(recipient.enquiryId)))];
+    const [rooms, roles, enquiries] = await Promise.all([
+      LiveRoom.find({ _id: { $in: roomIds } }),
+      RoomRole.find({ _id: { $in: roleIds } }),
+      ProjectEnquiry.find({ _id: { $in: enquiryIds } }),
+    ]);
+    const roomById = new Map(rooms.map((room) => [String(room._id), room]));
+    const roleById = new Map(roles.map((role) => [String(role._id), role]));
+    const enquiryById = new Map(enquiries.map((enquiry) => [String(enquiry._id), enquiry]));
+
+    res.json(recipients.map((recipient) => {
+      const room = roomById.get(String(recipient.roomId));
+      const role = recipient.roleId ? roleById.get(String(recipient.roleId)) : null;
+      const enquiry = enquiryById.get(String(recipient.enquiryId));
+      return {
+        _id: recipient._id,
+        enquiryId: recipient.enquiryId,
+        roomId: recipient.roomId,
+        room: room
+          ? {
+              _id: room._id,
+              roomCode: room.roomCode,
+              title: room.title,
+              rawDescription: room.rawDescription,
+              status: room.status,
+              meetLink: room.meetLink ?? null,
+              businessId: room.businessId,
+              createdAt: room.createdAt,
+            }
+          : null,
+        roleId: recipient.roleId ?? null,
+        role: role
+          ? {
+              _id: role._id,
+              roleTitle: role.roleTitle,
+              skillDomain: role.skillDomain,
+              requiredLevel: role.requiredLevel,
+              minReputation: role.minReputation,
+              status: role.status,
+            }
+          : {
+              _id: recipient.roleId ?? null,
+              roleTitle: recipient.role,
+              skillDomain: recipient.role,
+            },
+        message: enquiry?.message ?? null,
+        matchScore: recipient.matchScore ?? null,
+        matchedSkills: recipient.matchedSkills ?? [],
+        presenceStatusAtSend: recipient.presenceStatusAtSend,
+        emailStatus: recipient.emailStatus,
+        notificationStatus: recipient.notificationStatus,
+        responseStatus: recipient.responseStatus,
+        responseMessage: recipient.responseMessage ?? null,
+        sentAt: recipient.createdAt,
+        respondedAt: recipient.respondedAt ?? null,
+      };
+    }));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to get enquiries" });
+  }
+});
+
 router.post("/respond-invite", requireAuth, async (req: AuthRequest, res) => {
   const parsed = RespondInviteBody.safeParse(req.body);
   if (!parsed.success) {
@@ -266,6 +350,22 @@ function formatCred(c: InstanceType<typeof SbtCredential>) {
     onChainTx: c.onChainTx ?? null,
     issuedAt: c.issuedAt,
   };
+}
+
+function talentAvailabilityRank(user: any): number {
+  if (user?.isOnline && user?.availability !== "unavailable") return 4;
+  switch (user?.availability) {
+    case "available":
+      return 3;
+    case "available_soon":
+    case "part_time":
+      return 2;
+    case "busy":
+    case "unknown":
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 export default router;

@@ -22,11 +22,25 @@ export default function TalentDashboard() {
   const { data: invites, refetch: refetchInvites } = useGetTalentInvites({ query: { enabled: isAuthenticated, queryKey: getGetTalentInvitesQueryKey() } });
   const { data: credentials } = useGetTalentCredentials(user?._id ?? "", { query: { enabled: !!user?._id, queryKey: getGetTalentCredentialsQueryKey(user?._id ?? "") } });
   const [myRooms, setMyRooms] = useState<any[]>([]);
+  const [projectEnquiries, setProjectEnquiries] = useState<any[]>([]);
   const [copiedRoomCode, setCopiedRoomCode] = useState<string | null>(null);
   const [editingProfile, setEditingProfile] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileWallet, setProfileWallet] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
+  const [respondingEnquiryId, setRespondingEnquiryId] = useState<string | null>(null);
+
+  const loadProjectEnquiries = async () => {
+    if (!isAuthenticated) return;
+    const token = localStorage.getItem("dehix_token");
+    try {
+      const res = await fetch("/api/talent/enquiries", { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      setProjectEnquiries(Array.isArray(data) ? data : []);
+    } catch {
+      setProjectEnquiries([]);
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -35,6 +49,8 @@ export default function TalentDashboard() {
       .then((r) => r.json())
       .then((d) => setMyRooms(Array.isArray(d) ? d : []))
       .catch(() => {});
+    loadProjectEnquiries();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
   const updateAvailability = useUpdateAvailability({
@@ -72,6 +88,7 @@ export default function TalentDashboard() {
 
   const credList = Array.isArray(credentials) ? credentials : [];
   const inviteList = Array.isArray(invites) ? invites : [];
+  const pendingEnquiries = projectEnquiries.filter((enquiry) => enquiry.responseStatus === "pending").length;
   const overallRep =
     credList.length > 0
       ? Math.round(credList.reduce((s: number, c: any) => s + (c.reputationScore ?? 0), 0) / credList.length)
@@ -109,6 +126,26 @@ export default function TalentDashboard() {
     }
   };
 
+  const respondProjectEnquiry = async (enquiryRecipientId: string, status: string) => {
+    setRespondingEnquiryId(enquiryRecipientId);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const res = await fetch(`/api/project-enquiries/${enquiryRecipientId}/respond`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to respond to enquiry");
+      toast.success("Enquiry response saved");
+      loadProjectEnquiries();
+    } catch (e: any) {
+      toast.error(e.message ?? "Failed to respond to enquiry");
+    } finally {
+      setRespondingEnquiryId(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="sticky top-0 z-10 border-b border-border/40 bg-background/80 backdrop-blur-sm">
@@ -119,9 +156,9 @@ export default function TalentDashboard() {
             </div>
             <span className="font-medium text-sm">{user?.name}</span>
             <span className="text-xs text-muted-foreground border border-border/50 rounded px-1.5 py-0.5">Talent</span>
-            {inviteList.length > 0 && (
+            {inviteList.length + pendingEnquiries > 0 && (
               <span className="text-[10px] font-bold bg-rose-600 text-white rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 leading-none">
-                {inviteList.length}
+                {inviteList.length + pendingEnquiries}
               </span>
             )}
           </div>
@@ -202,9 +239,9 @@ export default function TalentDashboard() {
 
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-8">
-          <div className={`rounded-xl border p-4 text-center ${inviteList.length > 0 ? "border-rose-500/20 bg-rose-500/10" : "border-border/40 bg-card"}`}>
-            <div className={`text-2xl font-bold font-mono ${inviteList.length > 0 ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{inviteList.length}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">Pending invites</div>
+          <div className={`rounded-xl border p-4 text-center ${inviteList.length + pendingEnquiries > 0 ? "border-rose-500/20 bg-rose-500/10" : "border-border/40 bg-card"}`}>
+            <div className={`text-2xl font-bold font-mono ${inviteList.length + pendingEnquiries > 0 ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{inviteList.length + pendingEnquiries}</div>
+            <div className="text-xs text-muted-foreground mt-0.5">Pending asks</div>
           </div>
           <div className="rounded-xl border border-border/40 bg-card p-4 text-center">
             <div className="text-2xl font-bold font-mono">{myRooms.length}</div>
@@ -238,6 +275,93 @@ export default function TalentDashboard() {
             Join by Code
           </Button>
         </div>
+
+        {/* Project Enquiries */}
+        {projectEnquiries.length > 0 && (
+          <section className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold">Project Enquiries</h2>
+              <span className="text-xs text-muted-foreground">{pendingEnquiries} pending</span>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              {projectEnquiries.map((enquiry: any) => (
+                <div key={enquiry._id} className="rounded-xl border border-border/50 bg-card p-4">
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold text-sm leading-tight truncate">{enquiry.room?.title ?? "Project enquiry"}</h3>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <span className="text-xs text-primary font-medium">{enquiry.role?.roleTitle ?? enquiry.role?.skillDomain ?? "Role"}</span>
+                        {enquiry.matchScore !== null && enquiry.matchScore !== undefined && (
+                          <span className="text-[10px] border border-primary/20 bg-primary/10 text-primary rounded-full px-1.5 py-0.5">
+                            {enquiry.matchScore}% match
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <span className={`text-[10px] rounded-full px-2 py-0.5 border capitalize shrink-0 ${enquiry.responseStatus === "pending" ? "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400" : "border-green-500/20 bg-green-500/10 text-green-600 dark:text-green-400"}`}>
+                      {String(enquiry.responseStatus).replace(/_/g, " ")}
+                    </span>
+                  </div>
+                  {enquiry.message && (
+                    <p className="text-xs text-muted-foreground leading-relaxed border-l border-border/50 pl-3 mb-3">
+                      {enquiry.message}
+                    </p>
+                  )}
+                  {enquiry.matchedSkills?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-3">
+                      {enquiry.matchedSkills.slice(0, 4).map((skill: string) => (
+                        <span key={skill} className="text-[10px] border border-green-500/20 bg-green-500/10 text-green-600 dark:text-green-400 rounded px-1.5 py-0.5">
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => respondProjectEnquiry(enquiry._id, "interested")}
+                      disabled={respondingEnquiryId === enquiry._id}
+                    >
+                      Interested
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => respondProjectEnquiry(enquiry._id, "ask_question")}
+                      disabled={respondingEnquiryId === enquiry._id}
+                    >
+                      Ask Question
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => respondProjectEnquiry(enquiry._id, "proposal_submitted")}
+                      disabled={respondingEnquiryId === enquiry._id}
+                    >
+                      Proposal Sent
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => respondProjectEnquiry(enquiry._id, "not_interested")}
+                      disabled={respondingEnquiryId === enquiry._id}
+                    >
+                      Not Interested
+                    </Button>
+                  </div>
+                  {enquiry.roomId && (
+                    <button
+                      onClick={() => navigate(`/room/${enquiry.roomId}`)}
+                      className="text-[11px] text-primary hover:underline mt-3"
+                    >
+                      View project
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* My Active Rooms */}
         {myRooms.length > 0 && (

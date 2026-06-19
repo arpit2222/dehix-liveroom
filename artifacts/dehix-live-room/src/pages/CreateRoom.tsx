@@ -85,6 +85,12 @@ type TalentRecommendation = {
     avatarUrl?: string | null;
     walletAddress?: string | null;
     isOnline?: boolean;
+    availability?: string;
+    availabilityLabel?: string;
+    availabilityRank?: number;
+    location?: string | null;
+    rating?: number | null;
+    completedProjects?: number;
   };
   matchedRole: {
     roleTitle: string;
@@ -92,6 +98,7 @@ type TalentRecommendation = {
     requiredLevel: 1 | 2;
     minReputation: number;
     estimatedHours: number;
+    keywords?: string[];
   };
   credential: {
     skillDomain: string;
@@ -101,6 +108,8 @@ type TalentRecommendation = {
     interviewScore: number;
     projectsCompleted: number;
   };
+  matchedKeywords?: string[];
+  missingKeywords?: string[];
   finalScore: number;
   scoreBreakdown: {
     talentScore: number;
@@ -112,13 +121,23 @@ type TalentRecommendation = {
     reputationScore: number;
   };
   estimatedHourlyRateUsd: number;
+  weeklyRateUsd?: number;
+  monthlyRateUsd?: number;
   estimatedProjectCostUsd: number;
   reasons: string[];
+};
+
+type RoleRecommendationGroup = {
+  role: TalentRecommendation["matchedRole"];
+  availableMatches: TalentRecommendation[];
+  unavailableMatches: TalentRecommendation[];
+  topMatches: TalentRecommendation[];
 };
 
 type TalentRecommendationReport = {
   budgetUsd?: number | null;
   roleCount: number;
+  recommendedTeams?: RoleRecommendationGroup[];
   recommendations: TalentRecommendation[];
 };
 
@@ -1390,6 +1409,7 @@ export default function CreateRoom() {
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [downloadingBlueprintPdf, setDownloadingBlueprintPdf] = useState(false);
   const [talentRecommendationReport, setTalentRecommendationReport] = useState<TalentRecommendationReport | null>(null);
+  const [selectedTalentKeys, setSelectedTalentKeys] = useState<Record<string, boolean>>({});
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -1668,7 +1688,7 @@ Please return ONLY the modified answer itself, without any introductory or conve
         body: JSON.stringify({ message, launchSessionId: sessionData._id, clientContext }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Azure OpenAI request failed");
+      if (!res.ok) throw new Error(data.error ?? "AI request failed");
       const aiMessage: ChatMessage = data.message ?? {
         id: `ai-${Date.now()}`,
         userName: "DEHIX AI",
@@ -1682,7 +1702,7 @@ Please return ONLY the modified answer itself, without any introductory or conve
       const aiMessage: ChatMessage = {
         id: `error-${Date.now()}`,
         userName: "DEHIX AI",
-        message: err?.message ?? "Azure OpenAI request failed",
+        message: err?.message ?? "AI request failed",
         isAi: true,
         createdAt: new Date(),
       };
@@ -1720,7 +1740,7 @@ Please return ONLY the modified answer itself, without any introductory or conve
         body: JSON.stringify({ rawIdea: description.trim(), projectTitle: title }),
       });
       if (!res.ok) {
-        throw new Error(await readApiError(res, "Azure OpenAI failed to analyze the business idea"));
+        throw new Error(await readApiError(res, "Gemini AI failed to analyze the business idea"));
       }
       const data = await res.json();
       setSessionData(data.session);
@@ -2031,7 +2051,7 @@ Please return ONLY the modified text itself, without any introductory or convers
         headers: { Authorization: `Bearer ${getToken()}` },
       });
       if (!res.ok) {
-        throw new Error(await readApiError(res, "Azure OpenAI failed to prepare technical questions"));
+        throw new Error(await readApiError(res, "Gemini AI failed to prepare technical questions"));
       }
       const data = await res.json();
       const fetchedMandatoryQuestions = Array.isArray(data.mandatoryQuestions) && data.mandatoryQuestions.length > 0
@@ -2089,7 +2109,7 @@ Please return ONLY the modified text itself, without any introductory or convers
         body: JSON.stringify({ answers: answersPayload }),
       });
       if (!res.ok) {
-        throw new Error(await readApiError(res, "Azure OpenAI failed to generate the blueprint"));
+        throw new Error(await readApiError(res, "Gemini AI failed to generate the blueprint"));
       }
       const data = await res.json();
       setBlueprint(data.blueprint ?? null);
@@ -2129,8 +2149,10 @@ Please return ONLY the modified text itself, without any introductory or convers
       setTalentRecommendationReport({
         budgetUsd: data.budgetUsd ?? null,
         roleCount: data.roleCount ?? 0,
+        recommendedTeams: Array.isArray(data.recommendedTeams) ? data.recommendedTeams : undefined,
         recommendations: Array.isArray(data.recommendations) ? data.recommendations : [],
       });
+      setSelectedTalentKeys({});
       setPhase("recommendations");
     } catch (err: any) {
       const msg = err?.message ?? "Failed to generate talent recommendations";
@@ -2140,6 +2162,39 @@ Please return ONLY the modified text itself, without any introductory or convers
       setLoadingRecommendations(false);
     }
   };
+
+  const recommendationKey = (recommendation: TalentRecommendation) =>
+    `${recommendation.talentId}:${recommendation.matchedRole.roleTitle}`;
+
+  const groupedRecommendationTeams: RoleRecommendationGroup[] = talentRecommendationReport?.recommendedTeams?.length
+    ? talentRecommendationReport.recommendedTeams
+    : talentRecommendationReport
+      ? Object.values(
+          talentRecommendationReport.recommendations.reduce<Record<string, RoleRecommendationGroup>>((groups, recommendation) => {
+            const key = recommendation.matchedRole.roleTitle;
+            if (!groups[key]) {
+              groups[key] = {
+                role: recommendation.matchedRole,
+                availableMatches: [],
+                unavailableMatches: [],
+                topMatches: [],
+              };
+            }
+            groups[key].topMatches.push(recommendation);
+            if ((recommendation.user.availabilityRank ?? (recommendation.user.isOnline ? 4 : 0)) >= 2) {
+              groups[key].availableMatches.push(recommendation);
+            } else {
+              groups[key].unavailableMatches.push(recommendation);
+            }
+            return groups;
+          }, {})
+        )
+      : [];
+
+  const selectedTalentRecommendations = talentRecommendationReport
+    ? talentRecommendationReport.recommendations.filter((recommendation) => selectedTalentKeys[recommendationKey(recommendation)])
+    : [];
+
   const enterRoomDashboard = async () => {
     if (!sessionData?._id || creatingRoom) return;
     const missing = mandatoryQuestions.filter((question) => !answers[question._id]?.trim());
@@ -2166,10 +2221,10 @@ Please return ONLY the modified text itself, without any introductory or convers
           "Content-Type": "application/json",
           Authorization: `Bearer ${getToken()}`,
         },
-        body: JSON.stringify({ answers: answersPayload }),
+        body: JSON.stringify({ answers: answersPayload, selectedTalentRecommendations }),
       });
       if (!res.ok) {
-        throw new Error(await readApiError(res, "Azure OpenAI failed to create the room dashboard"));
+        throw new Error(await readApiError(res, "Gemini AI failed to create the room dashboard"));
       }
       const room = await res.json();
       navigate(`/room/${room._id}`);
@@ -2262,7 +2317,7 @@ Please return ONLY the modified text itself, without any introductory or convers
                 <div className="text-xs text-primary font-medium uppercase tracking-wider mb-2">Phase 1</div>
                 <h1 className="text-3xl font-bold tracking-tight mb-3">Analyze the business idea first</h1>
                 <p className="text-muted-foreground max-w-2xl">
-                  Describe the idea in normal language. Azure OpenAI will only analyze the business side here: market, audience,
+                  Describe the idea in normal language. Gemini AI will only analyze the business side here: market, audience,
                   competitors, revenue, risks, score, and verdict.
                 </p>
               </div>
@@ -2845,7 +2900,11 @@ Please return ONLY the modified text itself, without any introductory or convers
                     {loadingRecommendations ? "Refreshing..." : "Refresh matches"}
                   </Button>
                   <Button  onClick={enterRoomDashboard} disabled={creatingRoom || loadingRecommendations}>
-                    {creatingRoom ? "Preparing room..." : "Enter room dashboard"}
+                    {creatingRoom
+                      ? "Preparing room..."
+                      : selectedTalentRecommendations.length > 0
+                        ? `Create room with ${selectedTalentRecommendations.length} selected`
+                        : "Enter room dashboard"}
                   </Button>
                 </div>
               </div>
@@ -2862,6 +2921,9 @@ Please return ONLY the modified text itself, without any introductory or convers
               <div className="rounded-xl border border-border/50 bg-card p-4">
                 <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Recommended talents</div>
                 <div className="text-2xl font-bold font-mono">{talentRecommendationReport.recommendations.length}</div>
+                {selectedTalentRecommendations.length > 0 && (
+                  <div className="text-xs text-primary mt-1">{selectedTalentRecommendations.length} selected</div>
+                )}
               </div>
             </div>
 
@@ -2873,53 +2935,121 @@ Please return ONLY the modified text itself, without any introductory or convers
                 </p>
               </div>
             ) : (
-              <div className="space-y-4">
-                {talentRecommendationReport.recommendations.map((recommendation, index) => (
-                  <div key={`${recommendation.talentId}-${recommendation.matchedRole.roleTitle}-${index}`} className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
-                    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <div className="w-11 h-11 rounded-lg bg-primary/15 border border-primary/25 flex items-center justify-center shrink-0">
-                          <span className="text-primary font-bold">{recommendation.user.name?.[0]?.toUpperCase() ?? "T"}</span>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h2 className="text-lg font-semibold truncate">{recommendation.user.name}</h2>
-                            <span className={`text-[10px] rounded border px-2 py-0.5 ${recommendation.user.isOnline ? "border-green-500/20 bg-green-500/10 text-green-600 dark:text-green-400" : "border-border/50 bg-background/50 text-muted-foreground"}`}>
-                              {recommendation.user.isOnline ? "Available" : "Offline"}
-                            </span>
+              <div className="space-y-6">
+                {groupedRecommendationTeams.map((group) => (
+                  <section key={group.role.roleTitle} className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <div className="text-xs text-primary font-medium uppercase tracking-wider mb-1">Role match group</div>
+                        <h2 className="text-xl font-semibold">{group.role.roleTitle}</h2>
+                        <p className="text-sm text-muted-foreground mt-1">{group.role.skillDomain}</p>
+                        {group.role.keywords?.length ? (
+                          <div className="flex flex-wrap gap-1.5 mt-3">
+                            {group.role.keywords.slice(0, 9).map((keyword) => (
+                              <span key={keyword} className="text-[10px] border border-primary/20 bg-primary/10 text-primary rounded-full px-2 py-0.5">
+                                {keyword}
+                              </span>
+                            ))}
                           </div>
-                          <p className="text-sm text-primary mt-1">{recommendation.matchedRole.roleTitle} - {recommendation.credential.skillDomain}</p>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            L{recommendation.credential.level} - {recommendation.credential.reputationScore} rep - {recommendation.credential.projectsCompleted} completed projects - GitHub {recommendation.credential.githubScore}
-                          </p>
-                        </div>
+                        ) : null}
                       </div>
-                      <div className="shrink-0 text-left md:text-right">
-                        <div className="text-xs text-muted-foreground uppercase tracking-wider">Final score</div>
-                        <div className="text-3xl font-bold font-mono text-primary">{recommendation.finalScore}</div>
-                        <div className="text-xs text-muted-foreground mt-1">
-                          ${recommendation.estimatedHourlyRateUsd}/hr - {formatCurrency(recommendation.estimatedProjectCostUsd)} est.
-                        </div>
+                      <div className="text-xs text-muted-foreground md:text-right">
+                        <div><span className="font-mono text-foreground">{group.availableMatches.length}</span> available</div>
+                        <div><span className="font-mono text-foreground">{group.unavailableMatches.length}</span> not available rn</div>
                       </div>
                     </div>
 
-                    <div className="grid gap-3 md:grid-cols-3">
-                      <ScorePill label="Talent score" value={recommendation.scoreBreakdown.talentScore} />
-                      <ScorePill label="Skill match" value={recommendation.scoreBreakdown.skillMatchScore} />
-                      <ScorePill label="Budget fit" value={recommendation.scoreBreakdown.budgetFitScore} />
-                      <ScorePill label="Previous work" value={recommendation.scoreBreakdown.previousWorkScore} />
-                      <ScorePill label="Open source" value={recommendation.scoreBreakdown.openSourceScore} />
-                      <ScorePill label="Availability" value={recommendation.scoreBreakdown.availabilityScore} />
-                    </div>
+                    {[
+                      ["Available first", group.availableMatches],
+                      ["Not available right now", group.unavailableMatches],
+                    ].map(([label, matches]) => (
+                      Array.isArray(matches) && matches.length > 0 ? (
+                        <div key={String(label)} className="space-y-3">
+                          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{String(label)}</div>
+                          <div className="grid gap-3">
+                            {matches.map((recommendation) => {
+                              const key = recommendationKey(recommendation);
+                              const selected = !!selectedTalentKeys[key];
+                              return (
+                                <div key={key} className={`rounded-xl border p-4 transition-colors ${selected ? "border-primary/50 bg-primary/10" : "border-border/40 bg-background/35"}`}>
+                                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                    <div className="flex items-start gap-3 min-w-0">
+                                      <button
+                                        onClick={() => setSelectedTalentKeys((prev) => ({ ...prev, [key]: !prev[key] }))}
+                                        className={`mt-1 w-5 h-5 rounded border flex items-center justify-center shrink-0 ${selected ? "bg-primary border-primary text-primary-foreground" : "border-border/60"}`}
+                                        title="Select talent"
+                                      >
+                                        {selected ? "✓" : ""}
+                                      </button>
+                                      <div className="w-11 h-11 rounded-lg bg-primary/15 border border-primary/25 flex items-center justify-center shrink-0">
+                                        <span className="text-primary font-bold">{recommendation.user.name?.[0]?.toUpperCase() ?? "T"}</span>
+                                      </div>
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <h3 className="text-base font-semibold truncate">{recommendation.user.name}</h3>
+                                          <span className={`text-[10px] rounded border px-2 py-0.5 ${(recommendation.user.availabilityRank ?? 0) >= 2 ? "border-green-500/20 bg-green-500/10 text-green-600 dark:text-green-400" : "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
+                                            {recommendation.user.availabilityLabel ?? (recommendation.user.isOnline ? "Available now" : "Not available rn")}
+                                          </span>
+                                          {recommendation.user.location && (
+                                            <span className="text-[10px] rounded border border-border/40 px-2 py-0.5 text-muted-foreground">
+                                              {recommendation.user.location}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <p className="text-sm text-primary mt-1">{recommendation.credential.skillDomain}</p>
+                                        <p className="text-xs text-muted-foreground mt-1">
+                                          L{recommendation.credential.level} - {recommendation.credential.reputationScore} rep - {recommendation.credential.projectsCompleted} projects - GitHub {recommendation.credential.githubScore}
+                                        </p>
+                                        {recommendation.matchedKeywords?.length ? (
+                                          <div className="flex flex-wrap gap-1.5 mt-3">
+                                            {recommendation.matchedKeywords.slice(0, 8).map((keyword) => (
+                                              <span key={keyword} className="text-[10px] border border-green-500/20 bg-green-500/10 text-green-600 dark:text-green-400 rounded px-1.5 py-0.5">
+                                                {keyword}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        ) : null}
+                                        {recommendation.missingKeywords?.length ? (
+                                          <p className="text-[10px] text-muted-foreground/70 mt-2">
+                                            Missing/weak: {recommendation.missingKeywords.slice(0, 5).join(", ")}
+                                          </p>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                    <div className="shrink-0 text-left lg:text-right space-y-2">
+                                      <div>
+                                        <div className="text-xs text-muted-foreground uppercase tracking-wider">Score</div>
+                                        <div className="text-3xl font-bold font-mono text-primary">{recommendation.finalScore}</div>
+                                      </div>
+                                      <div className="text-xs text-muted-foreground">
+                                        <div>${recommendation.estimatedHourlyRateUsd}/hr</div>
+                                        <div>{formatCurrency(recommendation.weeklyRateUsd ?? recommendation.estimatedHourlyRateUsd * 40)}/week</div>
+                                        <div>{formatCurrency(recommendation.monthlyRateUsd ?? (recommendation.weeklyRateUsd ?? recommendation.estimatedHourlyRateUsd * 40) * 4)}/month</div>
+                                      </div>
+                                      <div className="flex gap-2 lg:justify-end">
+                                        <Button size="sm" variant={selected ? "default" : "outline"} onClick={() => setSelectedTalentKeys((prev) => ({ ...prev, [key]: !prev[key] }))}>
+                                          {selected ? "Selected" : "Select"}
+                                        </Button>
+                                        <Button size="sm" variant="ghost" onClick={() => navigate(`/talent/profile/${recommendation.talentId}`)}>
+                                          Profile
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
 
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {recommendation.reasons.slice(0, 6).map((reason, reasonIndex) => (
-                        <div key={reasonIndex} className="rounded-lg border border-border/30 bg-background/35 px-3 py-2 text-xs text-muted-foreground">
-                          {reason}
+                                  <div className="grid gap-2 md:grid-cols-3 mt-4">
+                                    <ScorePill label="Keyword match" value={recommendation.scoreBreakdown.skillMatchScore} />
+                                    <ScorePill label="Availability" value={recommendation.scoreBreakdown.availabilityScore} />
+                                    <ScorePill label="Budget fit" value={recommendation.scoreBreakdown.budgetFitScore} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                      ) : null
+                    ))}
+                  </section>
                 ))}
               </div>
             )}

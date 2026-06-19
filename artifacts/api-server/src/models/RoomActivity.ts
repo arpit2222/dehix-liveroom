@@ -14,6 +14,11 @@ export type ActivityType =
   | "milestone_submitted"
   | "ticket_created"
   | "notes_updated"
+  | "freelancer_matches_generated"
+  | "freelancer_shortlisted"
+  | "freelancer_enquiry_sent"
+  | "freelancer_enquiry_responded"
+  | "freelancer_hired"
   | "room_contracted"
   | "room_closed";
 

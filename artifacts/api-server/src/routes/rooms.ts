@@ -3,6 +3,11 @@ import { nanoid } from "nanoid";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
 import { RoomParticipant } from "../models/RoomParticipant.js";
+import { FreelancerMatch } from "../models/FreelancerMatch.js";
+import { ProjectShortlist } from "../models/ProjectShortlist.js";
+import { ProjectEnquiry } from "../models/ProjectEnquiry.js";
+import { ProjectEnquiryRecipient } from "../models/ProjectEnquiryRecipient.js";
+import { Notification } from "../models/Notification.js";
 import { Ticket } from "../models/Ticket.js";
 import { Milestone } from "../models/Milestone.js";
 import { Nda } from "../models/Nda.js";
@@ -33,6 +38,7 @@ import { LaunchClarification } from "../models/LaunchClarification.js";
 import { azureOpenai, azureOpenAiDeployment, isAiProviderEnabled } from "../lib/openai.js";
 import { TECH_MANDATORY_QUESTIONS } from "../lib/launchQuestions.js";
 import { requireRoomAccess, requireRoomOwner } from "../lib/roomAccess.js";
+import { calculateRoomFreelancerMatches } from "../lib/freelancerLinking.js";
 
 const router = Router();
 
@@ -184,6 +190,16 @@ router.get("/:id/activity", requireAuth, requireRoomAccess, async (req: AuthRequ
             return "Participant removed";
           case "notes_updated":
             return "Room notes updated";
+          case "freelancer_matches_generated":
+            return "Freelancer matches generated";
+          case "freelancer_shortlisted":
+            return "Freelancer shortlisted";
+          case "freelancer_enquiry_sent":
+            return "Freelancer enquiry sent";
+          case "freelancer_enquiry_responded":
+            return "Freelancer responded to enquiry";
+          case "freelancer_hired":
+            return "Freelancer hired";
           case "room_contracted":
             return "Room contracted";
           case "room_closed":
@@ -198,6 +214,7 @@ router.get("/:id/activity", requireAuth, requireRoomAccess, async (req: AuthRequ
         if (type.includes("nda")) return "N";
         if (type.includes("brief")) return "B";
         if (type.includes("participant")) return "P";
+        if (type.includes("freelancer")) return "F";
         return "*";
       };
       res.json(storedActivities.map((activity) => ({
@@ -299,6 +316,281 @@ router.get("/:id/participants", requireAuth, requireRoomAccess, async (req: Auth
   } catch (err) {
     req.log.error({ err }, "getParticipants error");
     res.status(500).json({ error: "Failed to get participants" });
+  }
+});
+
+router.post("/:id/freelancer-matches", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const roomId = String(req.params["id"]);
+    const topK = clampTopK(req.body?.topK);
+    const room = await LiveRoom.findById(roomId);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    const roles = await RoomRole.find({ roomId: room._id });
+    if (roles.length === 0) {
+      res.status(400).json({ error: "No required roles found for this room" });
+      return;
+    }
+
+    const candidates = await calculateRoomFreelancerMatches(room, roles, topK);
+    await FreelancerMatch.deleteMany({ roomId: room._id });
+    if (candidates.length > 0) {
+      await FreelancerMatch.insertMany(candidates.map((candidate) => ({ ...candidate, status: "recommended" })));
+    }
+
+    const saved = await FreelancerMatch.find({ roomId: room._id })
+      .populate("freelancerId", "-password")
+      .sort({ role: 1, matchScore: -1 });
+    const io = getIo();
+    if (io) {
+      io.to(`room:${roomId}`).emit("room:freelancer_matches_generated", { roomId, matchCount: saved.length });
+    }
+    RoomActivity.create({
+      roomId: room._id,
+      type: "freelancer_matches_generated",
+      actorId: req.userId,
+      meta: { matchCount: saved.length, roleCount: roles.length },
+    }).catch(() => {});
+
+    res.json({
+      roomId,
+      recommendedTeam: buildRecommendedTeam(roles, saved),
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    req.log.error({ err }, "generateFreelancerMatches error");
+    res.status(500).json({ error: "Failed to generate freelancer matches" });
+  }
+});
+
+router.get("/:id/freelancer-matches", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
+  try {
+    const roomId = String(req.params["id"]);
+    const roles = await RoomRole.find({ roomId });
+    const matches = await FreelancerMatch.find({ roomId })
+      .populate("freelancerId", "-password")
+      .sort({ role: 1, matchScore: -1 });
+    res.json({ roomId, recommendedTeam: buildRecommendedTeam(roles, matches) });
+  } catch (err) {
+    req.log.error({ err }, "getFreelancerMatches error");
+    res.status(500).json({ error: "Failed to get freelancer matches" });
+  }
+});
+
+router.post("/:id/shortlist", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const roomId = String(req.params["id"]);
+    const { freelancerId, roleId, role } = req.body ?? {};
+    if (!freelancerId) {
+      res.status(400).json({ error: "freelancerId is required" });
+      return;
+    }
+    const resolvedRole = await resolveRoomRole(roomId, roleId, role);
+    if (!resolvedRole) {
+      res.status(400).json({ error: "Role does not belong to this room" });
+      return;
+    }
+
+    const shortlist = await ProjectShortlist.findOneAndUpdate(
+      { roomId, freelancerId, roleId: resolvedRole._id },
+      {
+        roomId,
+        businessId: req.userId,
+        freelancerId,
+        roleId: resolvedRole._id,
+        role: resolvedRole.roleTitle,
+        status: "shortlisted",
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    await FreelancerMatch.findOneAndUpdate(
+      { roomId, freelancerId, roleId: resolvedRole._id },
+      { status: "shortlisted" }
+    );
+    RoomActivity.create({
+      roomId,
+      type: "freelancer_shortlisted",
+      actorId: req.userId,
+      meta: { freelancerId, role: resolvedRole.roleTitle },
+    }).catch(() => {});
+    res.json({ success: true, status: shortlist.status });
+  } catch (err) {
+    req.log.error({ err }, "shortlistFreelancer error");
+    res.status(500).json({ error: "Failed to shortlist freelancer" });
+  }
+});
+
+router.delete("/:id/shortlist/:freelancerId", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const roomId = String(req.params["id"]);
+    const roleId = typeof req.query["roleId"] === "string" ? req.query["roleId"] : undefined;
+    const filter: Record<string, any> = { roomId, freelancerId: req.params["freelancerId"] };
+    if (roleId) filter.roleId = roleId;
+    await ProjectShortlist.updateMany(filter, { status: "removed" });
+    await FreelancerMatch.updateMany(filter, { status: "recommended" });
+    res.json({ success: true, status: "removed" });
+  } catch (err) {
+    req.log.error({ err }, "removeShortlistFreelancer error");
+    res.status(500).json({ error: "Failed to remove shortlisted freelancer" });
+  }
+});
+
+router.post("/:id/enquiries/top-freelancers", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const roomId = String(req.params["id"]);
+    const topK = clampTopK(req.body?.topK);
+    const message = cleanMessage(req.body?.message);
+    const sendEmailToOffline = req.body?.sendEmailToOffline !== false;
+    const roles = await RoomRole.find({ roomId });
+    const selectedMatches: any[] = [];
+    for (const role of roles) {
+      const roleMatches = await FreelancerMatch.find({ roomId, roleId: role._id })
+        .populate("freelancerId", "-password")
+        .sort({ matchScore: -1 })
+        .limit(topK);
+      selectedMatches.push(...roleMatches);
+    }
+    if (selectedMatches.length === 0) {
+      res.status(400).json({ error: "Generate freelancer matches before sending enquiries" });
+      return;
+    }
+    const payload = await sendProjectEnquiry({
+      roomId,
+      businessId: req.userId!,
+      message,
+      sendEmailToOffline,
+      matches: selectedMatches,
+      log: req.log,
+    });
+    res.json(payload);
+  } catch (err) {
+    req.log.error({ err }, "sendTopFreelancerEnquiry error");
+    res.status(500).json({ error: "Failed to send enquiries" });
+  }
+});
+
+router.post("/:id/enquiries/selected-freelancers", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const roomId = String(req.params["id"]);
+    const freelancers = Array.isArray(req.body?.freelancers) ? req.body.freelancers : [];
+    const message = cleanMessage(req.body?.message);
+    const sendEmailToOffline = req.body?.sendEmailToOffline !== false;
+    if (freelancers.length === 0) {
+      res.status(400).json({ error: "Select at least one freelancer" });
+      return;
+    }
+
+    const matchFilters = [];
+    for (const item of freelancers) {
+      if (!item?.freelancerId) continue;
+      const role = await resolveRoomRole(roomId, item.roleId, item.role);
+      if (!role) continue;
+      matchFilters.push({ freelancerId: item.freelancerId, roleId: role._id });
+    }
+    if (matchFilters.length === 0) {
+      res.status(400).json({ error: "No valid selected freelancers found" });
+      return;
+    }
+
+    const matches = await FreelancerMatch.find({ roomId, $or: matchFilters })
+      .populate("freelancerId", "-password")
+      .sort({ matchScore: -1 });
+    if (matches.length === 0) {
+      res.status(400).json({ error: "Selected freelancers do not have saved matches yet" });
+      return;
+    }
+
+    const payload = await sendProjectEnquiry({
+      roomId,
+      businessId: req.userId!,
+      message,
+      sendEmailToOffline,
+      matches,
+      log: req.log,
+    });
+    res.json(payload);
+  } catch (err) {
+    req.log.error({ err }, "sendSelectedFreelancerEnquiry error");
+    res.status(500).json({ error: "Failed to send selected freelancer enquiries" });
+  }
+});
+
+router.get("/:id/enquiries", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const roomId = String(req.params["id"]);
+    const recipients = await ProjectEnquiryRecipient.find({ roomId })
+      .populate("freelancerId", "-password")
+      .sort({ createdAt: -1 });
+    const enquiryIds = [...new Set(recipients.map((recipient) => String(recipient.enquiryId)))];
+    const enquiries = await ProjectEnquiry.find({ _id: { $in: enquiryIds } });
+    const enquiryById = new Map(enquiries.map((enquiry) => [String(enquiry._id), enquiry]));
+    res.json({
+      roomId,
+      enquiries: recipients.map((recipient) => formatEnquiryRecipient(recipient, enquiryById.get(String(recipient.enquiryId)))),
+    });
+  } catch (err) {
+    req.log.error({ err }, "getRoomEnquiries error");
+    res.status(500).json({ error: "Failed to get enquiry status" });
+  }
+});
+
+router.post("/:id/hire", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const roomId = String(req.params["id"]);
+    const { freelancerId, roleId, role, agreedAmount, startDate } = req.body ?? {};
+    if (!freelancerId) {
+      res.status(400).json({ error: "freelancerId is required" });
+      return;
+    }
+    const resolvedRole = await resolveRoomRole(roomId, roleId, role);
+    if (!resolvedRole) {
+      res.status(400).json({ error: "Role does not belong to this room" });
+      return;
+    }
+
+    const participant = await RoomParticipant.findOneAndUpdate(
+      { roomId, userId: freelancerId },
+      { roomId, userId: freelancerId, roleId: resolvedRole._id, status: "accepted" },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    await RoomRole.findOneAndUpdate(
+      { _id: resolvedRole._id, roomId },
+      { filledBy: freelancerId, status: "filled" }
+    );
+    await FreelancerMatch.findOneAndUpdate(
+      { roomId, freelancerId, roleId: resolvedRole._id },
+      { status: "hired" }
+    );
+    await ProjectShortlist.findOneAndUpdate(
+      { roomId, freelancerId, roleId: resolvedRole._id },
+      {
+        roomId,
+        businessId: req.userId,
+        freelancerId,
+        roleId: resolvedRole._id,
+        role: resolvedRole.roleTitle,
+        status: "hired",
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    const io = getIo();
+    if (io) {
+      io.to(`room:${roomId}`).emit("room:participant_joined", { roomId, userId: freelancerId, status: "accepted" });
+      io.to(`talent:${freelancerId}`).emit("talent:hired", { roomId, roleId: resolvedRole._id });
+    }
+    RoomActivity.create({
+      roomId,
+      type: "freelancer_hired",
+      actorId: req.userId,
+      meta: { freelancerId, role: resolvedRole.roleTitle, agreedAmount, startDate },
+    }).catch(() => {});
+    res.json({ success: true, status: "hired", participant: formatParticipant(participant) });
+  } catch (err) {
+    req.log.error({ err }, "hireFreelancer error");
+    res.status(500).json({ error: "Failed to hire freelancer" });
   }
 });
 
@@ -999,6 +1291,233 @@ router.post("/:id/participants", requireAuth, requireRoomOwner, async (req: Auth
     res.status(500).json({ error: "Failed to invite talent" });
   }
 });
+
+function clampTopK(value: unknown): number {
+  const parsed = Number(value ?? 5);
+  if (!Number.isFinite(parsed)) return 5;
+  return Math.max(1, Math.min(20, Math.round(parsed)));
+}
+
+function cleanMessage(value: unknown): string {
+  const message = typeof value === "string" ? value.trim() : "";
+  if (!message) return "We liked your profile and want to discuss this DEHIX project.";
+  return message.slice(0, 2000);
+}
+
+async function resolveRoomRole(roomId: string, roleId?: unknown, roleTitle?: unknown) {
+  if (typeof roleId === "string" && roleId.trim()) {
+    return RoomRole.findOne({ _id: roleId, roomId });
+  }
+  if (typeof roleTitle === "string" && roleTitle.trim()) {
+    const roles = await RoomRole.find({ roomId });
+    return roles.find((role) => role.roleTitle.toLowerCase() === roleTitle.trim().toLowerCase()) ?? null;
+  }
+  return null;
+}
+
+function buildRecommendedTeam(roles: Array<InstanceType<typeof RoomRole>>, matches: any[]) {
+  const grouped = new Map<string, any[]>();
+  for (const match of matches) {
+    const key = String(match.roleId);
+    grouped.set(key, [...(grouped.get(key) ?? []), match]);
+  }
+
+  return roles.map((role) => {
+    const topMatches = (grouped.get(String(role._id)) ?? [])
+      .sort((a, b) => Number(b.matchScore ?? 0) - Number(a.matchScore ?? 0))
+      .map(formatFreelancerMatch);
+    return {
+      roleId: role._id,
+      role: role.roleTitle,
+      skillDomain: role.skillDomain,
+      quantityRequired: 1,
+      topMatches,
+    };
+  });
+}
+
+function formatFreelancerMatch(match: any) {
+  const freelancer = match.freelancerId as any;
+  const completedProjects = Number(freelancer?.completedProjects ?? 0);
+  return {
+    matchId: match._id,
+    roleId: match.roleId,
+    role: match.role,
+    freelancerId: freelancer?._id ?? match.freelancerId,
+    name: freelancer?.name ?? "Unknown freelancer",
+    email: freelancer?.email ?? null,
+    avatarUrl: freelancer?.avatarUrl ?? null,
+    walletAddress: freelancer?.walletAddress ?? null,
+    availability: freelancer?.availability ?? (freelancer?.isOnline ? "available" : "unknown"),
+    presenceStatus: freelancer?.isOnline ? "online" : "offline",
+    isOnline: freelancer?.isOnline ?? false,
+    lastSeenAt: freelancer?.lastSeen ?? null,
+    rating: freelancer?.rating ?? null,
+    completedProjects,
+    matchScore: match.matchScore,
+    matchedSkills: match.matchedSkills ?? [],
+    missingSkills: match.missingSkills ?? [],
+    scoreBreakdown: match.scoreBreakdown ?? {},
+    status: match.status,
+  };
+}
+
+async function sendProjectEnquiry({
+  roomId,
+  businessId,
+  message,
+  sendEmailToOffline,
+  matches,
+  log,
+}: {
+  roomId: string;
+  businessId: string;
+  message: string;
+  sendEmailToOffline: boolean;
+  matches: any[];
+  log: any;
+}) {
+  const enquiry = await ProjectEnquiry.create({
+    roomId,
+    businessId,
+    message,
+    sendEmailToOffline,
+    status: "sent",
+  });
+  const io = getIo();
+  const cooldownStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const uniqueMatches = new Map<string, any>();
+  for (const match of matches) {
+    const freelancer = match.freelancerId as any;
+    const key = `${String(freelancer?._id ?? match.freelancerId)}:${String(match.roleId)}`;
+    if (!uniqueMatches.has(key)) uniqueMatches.set(key, match);
+  }
+
+  const recipients: any[] = [];
+  for (const match of uniqueMatches.values()) {
+    const freelancer = match.freelancerId as any;
+    const freelancerId = String(freelancer?._id ?? match.freelancerId);
+    if (!freelancerId) continue;
+
+    const duplicate = await ProjectEnquiryRecipient.findOne({
+      roomId,
+      freelancerId,
+      roleId: match.roleId,
+      createdAt: { $gte: cooldownStart },
+    });
+    if (duplicate) {
+      recipients.push({
+        freelancerId,
+        role: match.role,
+        presenceStatusAtSend: freelancer?.isOnline ? "online" : "offline",
+        emailStatus: "skipped",
+        notificationStatus: "skipped",
+        responseStatus: duplicate.responseStatus,
+        skippedDuplicate: true,
+      });
+      continue;
+    }
+
+    const presenceStatusAtSend = freelancer?.isOnline ? "online" : "offline";
+    const inAppAllowed = freelancer?.notificationPreferences?.inAppNotifications !== false;
+    const emailAllowed =
+      sendEmailToOffline &&
+      presenceStatusAtSend === "offline" &&
+      freelancer?.emailVerified !== false &&
+      freelancer?.notificationPreferences?.projectEnquiryEmail !== false &&
+      !["blocked", "suspended"].includes(String(freelancer?.accountStatus ?? "active"));
+    const emailStatus = presenceStatusAtSend === "online" ? "not_required" : emailAllowed ? "queued" : "skipped";
+    const notificationStatus = inAppAllowed ? "sent" : "skipped";
+
+    const recipient = await ProjectEnquiryRecipient.create({
+      enquiryId: enquiry._id,
+      roomId,
+      freelancerId,
+      roleId: match.roleId,
+      role: match.role,
+      matchScore: match.matchScore,
+      matchedSkills: match.matchedSkills ?? [],
+      presenceStatusAtSend,
+      emailStatus,
+      notificationStatus,
+      responseStatus: "pending",
+    });
+
+    if (notificationStatus === "sent") {
+      await Notification.create({
+        userId: freelancerId,
+        type: "project_enquiry",
+        title: "New project enquiry",
+        message: "You have received a project enquiry matching your skills.",
+        roomId,
+        enquiryRecipientId: recipient._id,
+      }).catch((err) => log?.warn?.({ err }, "Failed to create enquiry notification"));
+      if (io) {
+        io.to(`talent:${freelancerId}`).emit("talent:project_enquiry", {
+          roomId,
+          enquiryRecipientId: recipient._id,
+          role: match.role,
+          matchScore: match.matchScore,
+        });
+      }
+    }
+
+    await FreelancerMatch.findOneAndUpdate(
+      { roomId, freelancerId, roleId: match.roleId },
+      { status: "enquired" }
+    );
+    recipients.push(formatEnquiryRecipient(recipient, enquiry, freelancer));
+  }
+
+  const sentCount = recipients.filter((recipient) => !recipient.skippedDuplicate).length;
+  if (sentCount === 0) {
+    enquiry.status = "failed";
+    await enquiry.save();
+  } else if (sentCount < uniqueMatches.size) {
+    enquiry.status = "partially_sent";
+    await enquiry.save();
+  }
+
+  RoomActivity.create({
+    roomId,
+    type: "freelancer_enquiry_sent",
+    actorId: businessId,
+    meta: { sentCount, requestedCount: uniqueMatches.size },
+  }).catch(() => {});
+  if (io) io.to(`room:${roomId}`).emit("room:freelancer_enquiry_sent", { roomId, sentCount });
+
+  return {
+    success: sentCount > 0,
+    enquiryId: enquiry._id,
+    sentCount,
+    recipients,
+  };
+}
+
+function formatEnquiryRecipient(recipient: any, enquiry?: any, populatedFreelancer?: any) {
+  const freelancer = populatedFreelancer ?? (recipient.freelancerId as any);
+  return {
+    _id: recipient._id,
+    enquiryId: recipient.enquiryId,
+    roomId: recipient.roomId,
+    freelancerId: freelancer?._id ?? recipient.freelancerId,
+    name: freelancer?.name ?? "Unknown freelancer",
+    email: freelancer?.email ?? null,
+    roleId: recipient.roleId ?? null,
+    role: recipient.role,
+    matchScore: recipient.matchScore ?? null,
+    matchedSkills: recipient.matchedSkills ?? [],
+    presenceStatusAtSend: recipient.presenceStatusAtSend,
+    emailStatus: recipient.emailStatus,
+    notificationStatus: recipient.notificationStatus,
+    responseStatus: recipient.responseStatus,
+    responseMessage: recipient.responseMessage ?? null,
+    sentAt: recipient.createdAt,
+    respondedAt: recipient.respondedAt ?? null,
+    message: enquiry?.message ?? null,
+    enquiryStatus: enquiry?.status ?? null,
+  };
+}
 
 function formatRoom(room: InstanceType<typeof LiveRoom>) {
   return {
