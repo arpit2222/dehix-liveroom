@@ -891,6 +891,14 @@ router.post("/:id/invite", requireAuth, requireRoomOwner, async (req: AuthReques
     }
     const existing = await RoomParticipant.findOne({ roomId, userId: talentId });
     if (existing) {
+      const io = getIo();
+      if (io && existing.status === "invited") {
+        io.to(`talent:${talentId}`).emit("talent:invited", {
+          roomId,
+          participantId: existing._id,
+          roleId: existing.roleId ?? roleId,
+        });
+      }
       res.json({ message: "Already invited" });
       return;
     }
@@ -906,6 +914,7 @@ router.post("/:id/invite", requireAuth, requireRoomOwner, async (req: AuthReques
       io.to(`talent:${talentId}`).emit("talent:invited", {
         roomId,
         participantId: participant._id,
+        roleId,
       });
     }
     res.json({ message: "Talent invited" });
@@ -1715,7 +1724,14 @@ router.post("/:id/participants", requireAuth, requireRoomOwner, async (req: Auth
       status: "invited",
     });
     const io = getIo();
-    if (io) io.to(`room:${roomId}`).emit("room:participant_invited", { roomId, userId });
+    if (io) {
+      io.to(`room:${roomId}`).emit("room:participant_invited", { roomId, userId });
+      io.to(`talent:${userId}`).emit("talent:invited", {
+        roomId,
+        participantId: participant._id,
+        roleId: participant.roleId ?? null,
+      });
+    }
     res.status(201).json(formatParticipant(participant));
   } catch (err) {
     req.log.error({ err }, "inviteParticipant error");

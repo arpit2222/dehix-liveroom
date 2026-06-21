@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
+import { io } from "socket.io-client";
+import { useQueryClient } from "@tanstack/react-query";
 import { useGetTalentInvites, useGetTalentCredentials, useRespondInvite, useUpdateAvailability, getGetTalentInvitesQueryKey, getGetTalentCredentialsQueryKey } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
 import { SBTCredentialCard } from "@/components/SBTCredentialCard";
@@ -18,8 +20,22 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function TalentDashboard() {
   const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
   const { user, logout, isAuthenticated } = useAuth();
-  const { data: invites, refetch: refetchInvites } = useGetTalentInvites({ query: { enabled: isAuthenticated, queryKey: getGetTalentInvitesQueryKey() } });
+  const inviteQueryKey = useMemo(
+    () => [...getGetTalentInvitesQueryKey(), user?._id ?? "anonymous"],
+    [user?._id]
+  );
+  const { data: invites, refetch: refetchInvites } = useGetTalentInvites({
+    query: {
+      enabled: isAuthenticated && user?.role === "talent",
+      queryKey: inviteQueryKey,
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnReconnect: "always",
+      refetchOnWindowFocus: true,
+    },
+  });
   const { data: credentials } = useGetTalentCredentials(user?._id ?? "", { query: { enabled: !!user?._id, queryKey: getGetTalentCredentialsQueryKey(user?._id ?? "") } });
   const [myRooms, setMyRooms] = useState<any[]>([]);
   const [projectEnquiries, setProjectEnquiries] = useState<any[]>([]);
@@ -30,7 +46,7 @@ export default function TalentDashboard() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [respondingEnquiryId, setRespondingEnquiryId] = useState<string | null>(null);
 
-  const loadProjectEnquiries = async () => {
+  const loadProjectEnquiries = useCallback(async () => {
     if (!isAuthenticated) return;
     const token = localStorage.getItem("dehix_token");
     try {
@@ -40,18 +56,58 @@ export default function TalentDashboard() {
     } catch {
       setProjectEnquiries([]);
     }
-  };
+  }, [isAuthenticated]);
 
-  useEffect(() => {
+  const loadMyRooms = useCallback(async () => {
     if (!isAuthenticated) return;
     const token = localStorage.getItem("dehix_token");
-    fetch("/api/talent/rooms", { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => setMyRooms(Array.isArray(d) ? d : []))
-      .catch(() => {});
-    loadProjectEnquiries();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    try {
+      const res = await fetch("/api/talent/rooms", { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      setMyRooms(Array.isArray(data) ? data : []);
+    } catch {
+      setMyRooms([]);
+    }
   }, [isAuthenticated]);
+
+  const refreshTalentInbox = useCallback(() => {
+    void refetchInvites();
+    void queryClient.invalidateQueries({ queryKey: getGetTalentInvitesQueryKey() });
+    void loadMyRooms();
+    void loadProjectEnquiries();
+  }, [loadMyRooms, loadProjectEnquiries, queryClient, refetchInvites]);
+
+  useEffect(() => {
+    if (!isAuthenticated || user?.role !== "talent") return;
+    refreshTalentInbox();
+  }, [isAuthenticated, refreshTalentInbox, user?.role, user?._id]);
+
+  useEffect(() => {
+    if (!isAuthenticated || user?.role !== "talent") return;
+    const token = localStorage.getItem("dehix_token");
+    if (!token) return;
+
+    const socketUrl = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/+$/, "");
+    const socket = io(socketUrl, {
+      auth: { token },
+      transports: ["websocket", "polling"],
+    });
+
+    socket.on("connect", refreshTalentInbox);
+    socket.on("talent:invited", () => {
+      toast.success("New room invitation received");
+      refreshTalentInbox();
+    });
+    socket.on("talent:project_enquiry", () => {
+      toast.success("New project enquiry received");
+      refreshTalentInbox();
+    });
+    socket.on("talent:hired", refreshTalentInbox);
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [isAuthenticated, refreshTalentInbox, user?.role, user?._id]);
 
   const updateAvailability = useUpdateAvailability({
     mutation: {
@@ -66,7 +122,7 @@ export default function TalentDashboard() {
   const respondInvite = useRespondInvite({
     mutation: {
       onSuccess: (_, vars) => {
-        refetchInvites();
+        refreshTalentInbox();
         const action = (vars.data as any)?.action;
         if (action === "accept") toast.success("Joined room successfully!");
         else if (action === "decline") toast.info("Invitation declined");
