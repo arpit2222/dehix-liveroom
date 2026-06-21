@@ -16,6 +16,7 @@ import { AiChatMessage } from "../models/AiChatMessage.js";
 import { TECH_MANDATORY_QUESTIONS } from "../lib/launchQuestions.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { userCanAccessRoom } from "../lib/roomAccess.js";
+import { isRoomOwner, userCanViewRoomDocument } from "../lib/roomWorkspace.js";
 import { ScopeProjectBody, MatchTalentBody, GenerateNdaBody, SuggestMilestonesBody, AiChatBody } from "@workspace/api-zod";
 
 const router = Router();
@@ -126,6 +127,10 @@ async function resolveChatThread(req: AuthRequest, res: Response): Promise<ChatT
     });
     if (!isOwner && !isParticipant) {
       res.status(403).json({ error: "You do not have access to this room chat" });
+      return null;
+    }
+    if (!isOwner) {
+      res.status(403).json({ error: "Use @dehixai inside a permitted LiveRoom channel" });
       return null;
     }
 
@@ -904,6 +909,10 @@ router.post("/generate-document", requireAuth, async (req: AuthRequest, res) => 
       return;
     }
     if (!(await ensureRoomAccess(req, res, room))) return;
+    if (!isRoomOwner(room, req.userId)) {
+      res.status(403).json({ error: "Only the business owner can generate room documents" });
+      return;
+    }
   }
 
   const convMsgs: ConvMsg[] = messages.map((m: any) => ({
@@ -1033,7 +1042,7 @@ router.get("/documents/:id/pdf", requireAuth, async (req: AuthRequest, res) => {
     if (doc.roomId) {
       const room = await LiveRoom.findById(doc.roomId);
       if (room) {
-        if (!(await userCanAccessRoom(String(room._id), req.userId))) {
+        if (!(await userCanAccessRoom(String(room._id), req.userId)) || !(await userCanViewRoomDocument(room, req.userId, doc.documentType))) {
           res.status(403).json({ error: "You do not have access to this document" });
           return;
         }
