@@ -112,60 +112,6 @@ In Create Room Phase 4, I added:
 
 Offline email delivery is recorded as `queued` when the freelancer is eligible, but no real SMTP/Resend/SendGrid provider is wired yet. In-app notification records and socket events are implemented.
 
-## Discord-style permissioned LiveRoom update
-
-I refactored LiveRoom into a chat-first workspace so business can negotiate with talent without exposing the full idea or generated documents by default.
-
-New backend pieces:
-
-- `RoomChannel` stores persistent `general` and `direct` channels.
-- `RoomMessage` stores user, system, and AI chat messages.
-- `RoomDocumentPermission` stores explicit per-talent document access.
-- `roomWorkspace` centralizes channel creation, visible channel checks, document catalog filtering, and permission checks.
-
-New flow:
-
-- Phase 4 and invite flows create invited participants, not full-access collaborators.
-- When a talent accepts, their status becomes `joined`.
-- The backend creates a persistent General message like `Aanya Rao joined as UI/UX Designer`.
-- The backend creates one business-talent direct channel.
-- Joined talent gets no private/generated docs by default.
-- Hiring can upgrade the participant to `accepted`, but document permissions remain explicit.
-
-New LiveRoom APIs:
-
-- `GET /api/rooms/:id/workspace`
-- `GET /api/rooms/:id/channels/:channelId/messages`
-- `POST /api/rooms/:id/channels/:channelId/messages`
-- `PATCH /api/rooms/:id/document-permissions`
-- `GET /api/rooms/:id/documents/:docType`
-- `GET /api/rooms/:id/documents/:docType/pdf`
-
-Access rules now enforced by backend:
-
-- Business owner can see all channels and documents.
-- Joined/accepted talent can see General plus only their own direct channel.
-- Talent cannot read another talent's DM.
-- Talent cannot preview, download PDF, download ZIP, export, or use AI context for a document unless business granted it.
-- Forbidden document access returns `403`.
-- Legacy room AI chat and room document generation are owner-only to prevent context leakage.
-
-Frontend update:
-
-- `LiveRoom.tsx` is now a Discord-style layout.
-- Left panel contains room status, channels, participants, docs, roles/tasks, and business-only access control.
-- Main area stays focused on the selected channel chat.
-- Business can toggle each talent's document access and open talent DMs.
-- `@dehixai` is handled inside normal channel messages instead of a separate Ask AI panel.
-
-Smoke check performed:
-
-- Business workspace loads channels, docs, participants, and permission matrix.
-- Aanya as joined talent sees General plus her own DM.
-- General contains exactly one persisted joined system message.
-- Revoking `business_blueprint` returns `403` for Aanya.
-- Granting `business_blueprint` immediately restores preview access.
-
 ## Verification
 
 Passed:
