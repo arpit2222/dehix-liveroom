@@ -3,11 +3,15 @@ import { nanoid } from "nanoid";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
 import { RoomParticipant } from "../models/RoomParticipant.js";
+import { RoomChannel } from "../models/RoomChannel.js";
+import { RoomMessage } from "../models/RoomMessage.js";
+import { RoomDocumentPermission } from "../models/RoomDocumentPermission.js";
 import { FreelancerMatch } from "../models/FreelancerMatch.js";
 import { ProjectShortlist } from "../models/ProjectShortlist.js";
 import { ProjectEnquiry } from "../models/ProjectEnquiry.js";
 import { ProjectEnquiryRecipient } from "../models/ProjectEnquiryRecipient.js";
 import { Notification } from "../models/Notification.js";
+import { User } from "../models/User.js";
 import { Ticket } from "../models/Ticket.js";
 import { Milestone } from "../models/Milestone.js";
 import { Nda } from "../models/Nda.js";
@@ -39,6 +43,21 @@ import { azureOpenai, azureOpenAiDeployment, isAiProviderEnabled } from "../lib/
 import { TECH_MANDATORY_QUESTIONS } from "../lib/launchQuestions.js";
 import { requireRoomAccess, requireRoomOwner } from "../lib/roomAccess.js";
 import { calculateRoomFreelancerMatches } from "../lib/freelancerLinking.js";
+import {
+  STANDARD_ROOM_DOCUMENTS,
+  createTalentJoinedSystemMessage,
+  ensureDirectChannelForParticipant,
+  ensureGeneralChannel,
+  ensureWorkspaceChannels,
+  formatRoomChannel,
+  formatRoomMessage,
+  getPermissionMatrix,
+  getRoomDocumentCatalog,
+  getVisibleChannels,
+  isRoomOwner,
+  userCanAccessChannel,
+  userCanViewRoomDocument,
+} from "../lib/roomWorkspace.js";
 
 const router = Router();
 
@@ -105,15 +124,36 @@ router.post("/join", requireAuth, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findOne({ roomCode: roomCode.trim().toUpperCase() });
     if (!room) { res.status(404).json({ error: "Room not found. Check the code and try again." }); return; }
-    const existing = await RoomParticipant.findOne({ roomId: room._id, userId: req.userId });
-    if (existing) {
+    if (String(room.businessId) === req.userId) {
+      await ensureWorkspaceChannels(room);
       res.json({ room: formatRoom(room), alreadyJoined: true });
       return;
     }
-    const participant = await RoomParticipant.create({ roomId: room._id, userId: req.userId, status: "joined" });
+    const existing = await RoomParticipant.findOne({ roomId: room._id, userId: req.userId });
+    if (!existing) {
+      res.status(403).json({ error: "Only invited talent can join this live room" });
+      return;
+    }
+    if (existing.status === "joined" || existing.status === "accepted") {
+      await ensureDirectChannelForParticipant(room, existing);
+      res.json({ room: formatRoom(room), alreadyJoined: true });
+      return;
+    }
+    if (existing.status !== "invited") {
+      res.status(403).json({ error: "This invite is not active" });
+      return;
+    }
+    existing.status = "joined";
+    existing.joinedAt = new Date();
+    await existing.save();
+    const directChannel = await ensureDirectChannelForParticipant(room, existing);
     const io = getIo();
+    if (directChannel && io) {
+      io.to(`room:${room._id}`).emit("room:channel_created", formatRoomChannel(directChannel));
+    }
+    await createTalentJoinedSystemMessage(room, existing, io);
     if (io) io.to(`room:${room._id}`).emit("room:participant_joined", { roomId: room._id, userId: req.userId, status: "joined" });
-    res.json({ room: formatRoom(room), participant, alreadyJoined: false });
+    res.json({ room: formatRoom(room), participant: existing, alreadyJoined: false });
   } catch (err) {
     req.log.error({ err }, "joinByCode error");
     res.status(500).json({ error: "Failed to join room" });
@@ -126,7 +166,10 @@ router.get("/my", requireAuth, async (req: AuthRequest, res) => {
     if (req.userRole === "business") {
       rooms = await LiveRoom.find({ businessId: req.userId }).sort({ createdAt: -1 });
     } else {
-      const participations = await RoomParticipant.find({ userId: req.userId }).select("roomId");
+      const participations = await RoomParticipant.find({
+        userId: req.userId,
+        status: { $in: ["joined", "accepted"] },
+      }).select("roomId");
       const roomIds = participations.map((p) => p.roomId);
       rooms = await LiveRoom.find({ _id: { $in: roomIds } }).sort({ createdAt: -1 });
     }
@@ -149,7 +192,7 @@ router.get("/my", requireAuth, async (req: AuthRequest, res) => {
     const tCountMap = new Map(ticketCounts.map((t: any) => [String(t._id), { total: t.total, done: t.done }]));
     const mCountMap = new Map(milestoneCounts.map((m: any) => [String(m._id), { total: m.total, totalUsd: m.totalUsd, releasedUsd: m.releasedUsd }]));
     res.json(rooms.map((room) => ({
-      ...formatRoom(room),
+      ...formatRoomForUser(room, req.userId),
       participantCount: pCountMap.get(String(room._id)) ?? 0,
       ticketStats: tCountMap.get(String(room._id)) ?? { total: 0, done: 0 },
       milestoneStats: mCountMap.get(String(room._id)) ?? { total: 0, totalUsd: 0, releasedUsd: 0 },
@@ -293,7 +336,7 @@ router.get("/:id", requireAuth, requireRoomAccess, async (req: AuthRequest, res)
       Nda.findOne({ roomId: room._id }),
     ]);
     res.json({
-      ...formatRoom(room),
+      ...formatRoomForUser(room, req.userId),
       roles: roles.map(formatRole),
       participants: participants.map(formatParticipant),
       tickets: tickets.map(formatTicket),
@@ -316,6 +359,229 @@ router.get("/:id/participants", requireAuth, requireRoomAccess, async (req: Auth
   } catch (err) {
     req.log.error({ err }, "getParticipants error");
     res.status(500).json({ error: "Failed to get participants" });
+  }
+});
+
+router.get("/:id/workspace", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findById(req.params["id"]);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    await ensureWorkspaceChannels(room);
+    const [roles, participants, tickets, milestones, nda, channels, docCatalog] = await Promise.all([
+      RoomRole.find({ roomId: room._id }),
+      RoomParticipant.find({ roomId: room._id }).populate("userId", "-password"),
+      Ticket.find({ roomId: room._id }),
+      Milestone.find({ roomId: room._id }),
+      Nda.findOne({ roomId: room._id }),
+      getVisibleChannels(room, req.userId!),
+      getRoomDocumentCatalog(room, req.userId!),
+    ]);
+    const currentParticipant = await RoomParticipant.findOne({
+      roomId: room._id,
+      userId: req.userId,
+      status: { $in: ["joined", "accepted"] },
+    });
+    const permissionMatrix = isRoomOwner(room, req.userId) ? await getPermissionMatrix(room) : [];
+    const displayChannels = await formatWorkspaceChannels(room, channels, req.userId!);
+    res.json({
+      room: formatRoomForUser(room, req.userId),
+      roles: roles.map(formatRole),
+      participants: participants.map(formatParticipant),
+      tickets: tickets.map(formatTicket),
+      milestones: milestones.map(formatMilestone),
+      nda: nda ? formatNda(nda) : null,
+      channels: displayChannels,
+      documents: docCatalog,
+      permissionMatrix,
+      currentUserAccess: {
+        isOwner: isRoomOwner(room, req.userId),
+        participantId: currentParticipant?._id ?? null,
+        status: currentParticipant?.status ?? (isRoomOwner(room, req.userId) ? "owner" : null),
+        canManageDocuments: isRoomOwner(room, req.userId),
+        canSeeAllChannels: isRoomOwner(room, req.userId),
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "getWorkspace error");
+    res.status(500).json({ error: "Failed to load workspace" });
+  }
+});
+
+router.get("/:id/channels/:channelId/messages", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findById(req.params["id"]);
+    const channel = await RoomChannel.findOne({ _id: req.params["channelId"], roomId: req.params["id"] });
+    if (!room || !channel) {
+      res.status(404).json({ error: "Channel not found" });
+      return;
+    }
+    if (!(await userCanAccessChannel(room, channel, req.userId))) {
+      res.status(403).json({ error: "You do not have access to this channel" });
+      return;
+    }
+    const limit = Math.max(20, Math.min(200, Number(req.query["limit"] ?? 120)));
+    const messages = await RoomMessage.find({ roomId: room._id, channelId: channel._id })
+      .sort({ createdAt: -1 })
+      .limit(limit);
+    res.json(messages.reverse().map(formatRoomMessage));
+  } catch (err) {
+    req.log.error({ err }, "getChannelMessages error");
+    res.status(500).json({ error: "Failed to load messages" });
+  }
+});
+
+router.post("/:id/channels/:channelId/messages", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findById(req.params["id"]);
+    const channel = await RoomChannel.findOne({ _id: req.params["channelId"], roomId: req.params["id"] });
+    if (!room || !channel) {
+      res.status(404).json({ error: "Channel not found" });
+      return;
+    }
+    if (!(await userCanAccessChannel(room, channel, req.userId))) {
+      res.status(403).json({ error: "You do not have access to this channel" });
+      return;
+    }
+    const messageText = typeof req.body?.message === "string" ? req.body.message.trim().slice(0, 6000) : "";
+    if (!messageText) {
+      res.status(400).json({ error: "message is required" });
+      return;
+    }
+    const user = await User.findById(req.userId).select("name");
+    const saved = await RoomMessage.create({
+      roomId: room._id,
+      channelId: channel._id,
+      senderId: req.userId,
+      senderName: user?.name ?? "User",
+      type: "user",
+      message: messageText,
+      mentions: extractMentions(messageText),
+    });
+    const io = getIo();
+    emitChannelMessage(io, room, channel, saved);
+    const aiMessage = messageMentionsDehixAi(messageText)
+      ? await createPermissionAwareAiReply(room, channel, req.userId!, messageText, io)
+      : null;
+    res.status(201).json({
+      message: formatRoomMessage(saved),
+      aiMessage: aiMessage ? formatRoomMessage(aiMessage) : null,
+    });
+  } catch (err) {
+    req.log.error({ err }, "createChannelMessage error");
+    res.status(500).json({ error: "Failed to send message" });
+  }
+});
+
+router.patch("/:id/document-permissions", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findById(req.params["id"]);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    const participantId = typeof req.body?.participantId === "string" ? req.body.participantId : "";
+    const talentId = typeof req.body?.talentId === "string" ? req.body.talentId : "";
+    const docType = typeof req.body?.docType === "string" ? req.body.docType.trim() : "";
+    const canView = Boolean(req.body?.canView);
+    if (!docType || (!participantId && !talentId)) {
+      res.status(400).json({ error: "participantId or talentId plus docType is required" });
+      return;
+    }
+    const participant = await RoomParticipant.findOne({
+      roomId: room._id,
+      ...(participantId ? { _id: participantId } : { userId: talentId }),
+    });
+    if (!participant) {
+      res.status(404).json({ error: "Participant not found" });
+      return;
+    }
+    const baseSet = {
+      roomId: room._id,
+      participantId: participant._id,
+      talentId: participant.userId,
+      docType,
+      canView,
+      grantedBy: req.userId,
+    };
+    const saved = await RoomDocumentPermission.findOneAndUpdate(
+      { roomId: room._id, talentId: participant.userId, docType },
+      canView
+        ? { $set: { ...baseSet, grantedAt: new Date() }, $unset: { revokedAt: "" } }
+        : { $set: { ...baseSet, revokedAt: new Date() } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    getIo()?.to(`room:${room._id}`).emit("room:document_permission_updated", {
+      roomId: room._id,
+      participantId: participant._id,
+      talentId: participant.userId,
+      docType,
+      canView,
+    });
+    res.json({
+      _id: saved._id,
+      participantId: saved.participantId,
+      talentId: saved.talentId,
+      docType: saved.docType,
+      canView: saved.canView,
+      grantedAt: saved.grantedAt,
+      revokedAt: saved.revokedAt ?? null,
+    });
+  } catch (err) {
+    req.log.error({ err }, "updateDocumentPermission error");
+    res.status(500).json({ error: "Failed to update document permission" });
+  }
+});
+
+router.get("/:id/documents/:docType", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findById(req.params["id"]);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    const docType = String(req.params["docType"]);
+    if (!(await userCanViewRoomDocument(room, req.userId, docType))) {
+      res.status(403).json({ error: "You do not have access to this document" });
+      return;
+    }
+    const preview = await buildRoomDocumentPreview(room, docType);
+    if (!preview) {
+      res.status(404).json({ error: "Document not found" });
+      return;
+    }
+    res.json(preview);
+  } catch (err) {
+    req.log.error({ err }, "getRoomDocumentPreview error");
+    res.status(500).json({ error: "Failed to load document" });
+  }
+});
+
+router.get("/:id/documents/:docType/pdf", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findById(req.params["id"]);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    const docType = String(req.params["docType"]);
+    if (!(await userCanViewRoomDocument(room, req.userId, docType))) {
+      res.status(403).json({ error: "You do not have access to this document" });
+      return;
+    }
+    const built = await buildStandardRoomDocumentPdf(room, docType);
+    if (!built) {
+      res.status(404).json({ error: "Document is not available" });
+      return;
+    }
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${built.filename}"`);
+    res.send(built.buffer);
+  } catch (err) {
+    req.log.error({ err }, "downloadRoomDocumentPdf error");
+    res.status(500).json({ error: "Failed to download document PDF" });
   }
 });
 
@@ -385,6 +651,11 @@ router.post("/:id/shortlist", requireAuth, requireRoomOwner, async (req: AuthReq
     const { freelancerId, roleId, role } = req.body ?? {};
     if (!freelancerId) {
       res.status(400).json({ error: "freelancerId is required" });
+      return;
+    }
+    const room = await LiveRoom.findById(roomId);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
       return;
     }
     const resolvedRole = await resolveRoomRole(roomId, roleId, role);
@@ -544,6 +815,11 @@ router.post("/:id/hire", requireAuth, requireRoomOwner, async (req: AuthRequest,
       res.status(400).json({ error: "freelancerId is required" });
       return;
     }
+    const room = await LiveRoom.findById(roomId);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
     const resolvedRole = await resolveRoomRole(roomId, roleId, role);
     if (!resolvedRole) {
       res.status(400).json({ error: "Role does not belong to this room" });
@@ -577,6 +853,11 @@ router.post("/:id/hire", requireAuth, requireRoomOwner, async (req: AuthRequest,
     );
 
     const io = getIo();
+    const directChannel = await ensureDirectChannelForParticipant(room, participant);
+    if (directChannel && io) {
+      io.to(`room:${roomId}`).emit("room:channel_created", formatRoomChannel(directChannel));
+    }
+    await createTalentJoinedSystemMessage(room, participant, io);
     if (io) {
       io.to(`room:${roomId}`).emit("room:participant_joined", { roomId, userId: freelancerId, status: "accepted" });
       io.to(`talent:${freelancerId}`).emit("talent:hired", { roomId, roleId: resolvedRole._id });
@@ -685,53 +966,48 @@ router.post("/:id/close", requireAuth, requireRoomOwner, async (req: AuthRequest
   }
 });
 
-router.get("/:id/business-validation.pdf", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+router.get("/:id/business-validation.pdf", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
-    if (String(room.businessId) !== req.userId) {
-      res.status(403).json({ error: "Only the room owner can download the validation PDF" });
+    if (!(await userCanViewRoomDocument(room, req.userId, "business_validation"))) {
+      res.status(403).json({ error: "You do not have access to this document" });
       return;
     }
 
-    const session = await findLaunchSessionForRoom(room);
-    const pdf = session?.researchText
-      ? await getOrCreateBusinessValidationPdf(session)
-      : await buildBusinessValidationPdf(`${room.title} - Business Validation Report`, (room.aiScopedBrief as any)?.businessValidation);
+    const built = await buildStandardRoomDocumentPdf(room, "business_validation");
+    if (!built) {
+      res.status(404).json({ error: "Validation report is not available for this room" });
+      return;
+    }
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${room.roomCode}-business-validation.pdf"`);
-    res.send(pdf);
+    res.send(built.buffer);
   } catch (err) {
     req.log.error({ err }, "downloadRoomBusinessValidationPdf error");
     res.status(500).json({ error: "Failed to download business validation PDF" });
   }
 });
 
-router.get("/:id/business-blueprint.pdf", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+router.get("/:id/business-blueprint.pdf", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
-    if (String(room.businessId) !== req.userId) {
-      res.status(403).json({ error: "Only the room owner can download the blueprint PDF" });
+    if (!(await userCanViewRoomDocument(room, req.userId, "business_blueprint"))) {
+      res.status(403).json({ error: "You do not have access to this document" });
       return;
     }
 
-    const session = await findLaunchSessionForRoom(room);
-    const brief = room.aiScopedBrief as any;
-    let pdf: Buffer;
-    if (session?.technicalDocText) {
-      pdf = await getOrCreateBusinessBlueprintPdf(session);
-    } else if (brief?.businessBlueprint) {
-      pdf = await buildBusinessBlueprintPdf(`${room.title} - Business Development Blueprint`, brief.businessBlueprint);
-    } else {
+    const built = await buildStandardRoomDocumentPdf(room, "business_blueprint");
+    if (!built) {
       res.status(404).json({ error: "Blueprint report is not available for this room" });
       return;
     }
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${room.roomCode}-business-blueprint.pdf"`);
-    res.send(pdf);
+    res.send(built.buffer);
   } catch (err) {
     req.log.error({ err }, "downloadRoomBusinessBlueprintPdf error");
     res.status(500).json({ error: "Failed to download business blueprint PDF" });
@@ -838,6 +1114,267 @@ async function buildRoomContext(room: any): Promise<string> {
   ].join("\n\n");
 }
 
+async function formatWorkspaceChannels(room: InstanceType<typeof LiveRoom>, channels: Array<InstanceType<typeof RoomChannel>>, viewerId: string) {
+  const userIds = [...new Set(channels.flatMap((channel) => channel.participantIds.map(String)))];
+  const users = userIds.length > 0 ? await User.find({ _id: { $in: userIds } }).select("name email") : [];
+  const userById = new Map(users.map((user) => [String(user._id), user]));
+  return channels.map((channel) => {
+    if (channel.type === "general") return formatRoomChannel(channel, "general");
+    const otherId = channel.participantIds.map(String).find((id) => id !== viewerId) ?? String(room.businessId);
+    const other = otherId ? userById.get(otherId) : null;
+    return formatRoomChannel(channel, other?.name ? `DM: ${other.name}` : "Direct message");
+  });
+}
+
+function extractMentions(message: string): string[] {
+  const mentions = new Set<string>();
+  for (const match of message.matchAll(/@([a-z0-9_-]+)/gi)) {
+    mentions.add(match[1]!.toLowerCase());
+  }
+  return [...mentions];
+}
+
+function messageMentionsDehixAi(message: string): boolean {
+  return extractMentions(message).includes("dehixai");
+}
+
+async function createPermissionAwareAiReply(
+  room: InstanceType<typeof LiveRoom>,
+  channel: InstanceType<typeof RoomChannel>,
+  userId: string,
+  userMessage: string,
+  io = getIo()
+) {
+  const context = await buildPermissionAwareAiContext(room, channel, userId);
+  let reply = "DEHIX AI is not configured for this environment.";
+
+  if (isAiProviderEnabled) {
+    const systemPrompt = `You are DEHIX AI inside a Discord-style LiveRoom.
+
+Use only the context below. If the current user is talent and something is not in the provided context, say that the business has not granted access to that information yet.
+Do not reveal hidden project documents, private business notes, other talent DMs, or restricted Phase 1/2/3 details unless they are explicitly present in the context.
+Answer directly and concisely in Markdown.
+
+${context}`;
+
+    const completion = await azureOpenai.chat.completions.create({
+      model: azureOpenAiDeployment,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ],
+      max_completion_tokens: 1200,
+    });
+    reply = completion.choices[0]?.message?.content ?? "I couldn't process that request.";
+  }
+
+  const savedReply = await RoomMessage.create({
+    roomId: room._id,
+    channelId: channel._id,
+    senderName: "DEHIX AI",
+    type: "ai",
+    message: reply,
+    mentions: [],
+  });
+  emitChannelMessage(io, room, channel, savedReply);
+  return savedReply;
+}
+
+function emitChannelMessage(io: ReturnType<typeof getIo>, room: InstanceType<typeof LiveRoom>, channel: InstanceType<typeof RoomChannel>, message: InstanceType<typeof RoomMessage>) {
+  if (!io) return;
+  const payload = formatRoomMessage(message);
+  if (channel.type === "general") {
+    io.to(`room:${room._id}`).emit("room:message_created", payload);
+    return;
+  }
+  for (const participantId of channel.participantIds) {
+    io.to(`talent:${String(participantId)}`).emit("room:message_created", payload);
+  }
+}
+
+async function buildPermissionAwareAiContext(
+  room: InstanceType<typeof LiveRoom>,
+  channel: InstanceType<typeof RoomChannel>,
+  userId: string
+): Promise<string> {
+  const owner = isRoomOwner(room, userId);
+  const visibleChannels = owner ? await RoomChannel.find({ roomId: room._id }) : await getVisibleChannels(room, userId);
+  const visibleChannelIds = visibleChannels.map((visibleChannel) => visibleChannel._id);
+  const [messages, generatedDocs] = await Promise.all([
+    RoomMessage.find({ roomId: room._id, channelId: { $in: visibleChannelIds } }).sort({ createdAt: 1 }).limit(200),
+    GeneratedDoc.find({ roomId: room._id }).sort({ createdAt: -1 }),
+  ]);
+  const visibleConversation = messages
+    .map((message) => `${message.type === "ai" ? "DEHIX AI" : message.senderName}: ${message.message}`)
+    .join("\n");
+
+  if (owner) {
+    const session = await findLaunchSessionForRoom(room);
+    const launchContext = await buildLaunchContext(session);
+    const roomContext = await buildRoomContext(room);
+    const docs = generatedDocs.map((doc) => `${doc.title} (${doc.documentType})\n${doc.content}`).join("\n\n");
+    return [
+      "Current user: business owner. Full room context is allowed.",
+      `Active channel: ${channel.name}`,
+      launchContext,
+      roomContext,
+      `Generated documents:\n${docs || "No generated documents yet."}`,
+      `Visible room conversations:\n${visibleConversation || "No messages yet."}`,
+    ].join("\n\n");
+  }
+
+  const participant = await RoomParticipant.findOne({ roomId: room._id, userId, status: { $in: ["joined", "accepted"] } });
+  const role = participant?.roleId ? await RoomRole.findById(participant.roleId) : null;
+  const tickets = participant?.roleId
+    ? await Ticket.find({ roomId: room._id, assignedRole: participant.roleId })
+    : [];
+  const allowedDocs = await buildAllowedDocumentContext(room, userId);
+  return [
+    "Current user: invited talent. Context is permission-filtered.",
+    `Room title: ${room.title}`,
+    `Room status: ${room.status}`,
+    `Talent role:\n${role ? safeJson(formatRole(role), 2000) : "No role assigned."}`,
+    `Assigned tickets:\n${safeJson(tickets.map(formatTicket), 5000)}`,
+    `Allowed documents:\n${allowedDocs || "No documents have been granted by the business yet."}`,
+    `Visible room conversations:\n${visibleConversation || "No messages yet."}`,
+  ].join("\n\n");
+}
+
+async function buildAllowedDocumentContext(room: InstanceType<typeof LiveRoom>, userId: string): Promise<string> {
+  const catalog = await getRoomDocumentCatalog(room, userId);
+  const chunks: string[] = [];
+  for (const doc of catalog) {
+    const preview = await buildRoomDocumentPreview(room, doc.docType);
+    if (preview) {
+      chunks.push(`${preview.title} (${preview.documentType})\n${preview.content}`);
+    }
+  }
+  return chunks.join("\n\n").slice(0, 16000);
+}
+
+async function resolveBlueprintForRoom(room: InstanceType<typeof LiveRoom>): Promise<any | null> {
+  const session = await findLaunchSessionForRoom(room);
+  const brief = room.aiScopedBrief as any;
+  if (session?.technicalDocText) {
+    try {
+      return JSON.parse(session.technicalDocText);
+    } catch {
+      return null;
+    }
+  }
+  if (brief?.businessBlueprint) return brief.businessBlueprint;
+  if (!brief) return null;
+  return {
+    executive_summary: {
+      idea_name: room.title,
+      one_line_description: brief?.projectSummary || room.rawDescription,
+      business_goal: brief?.projectSummary || room.rawDescription,
+      target_market: "Global / Multi-region",
+      recommended_launch_strategy: "MVP Rollout",
+    },
+    mvp_definition: {
+      must_have_features: brief?.tickets?.map((ticket: any) => ({ feature: ticket.title, purpose: ticket.description || "Core ticket task." })) || [],
+      should_have_features: [],
+      future_features: [],
+      excluded_from_mvp: [],
+    },
+    technical_architecture: {
+      recommended_stack: {
+        frontend: "React / Vite / TailwindCSS",
+        backend: "Node.js / Express / Socket.io",
+        database: "MongoDB / Mongoose",
+        authentication: "JWT / Cookie Session",
+        cloud: "AWS / Vercel",
+      },
+      system_components: [
+        { component: "Frontend Portal", purpose: "Client interaction and UI dashboard" },
+        { component: "API Backend Server", purpose: "Business logic and database persistence" },
+      ],
+    },
+    team_requirements: {
+      recommended_team: brief?.roles?.map((role: any) => ({ role: role.roleTitle, responsibilities: role.responsibilities })) || [],
+      minimum_team: brief?.roles?.slice(0, 2)?.map((role: any) => role.roleTitle) || [],
+    },
+    development_roadmap: {
+      phase_1_discovery: { duration: "1 week", deliverables: ["Requirement spec", "Figma prototype"] },
+      phase_3_mvp_development: { duration: `${brief?.estimatedWeeks || 6} weeks`, deliverables: ["Frontend/Backend integration", "Production MVP"] },
+    },
+    cost_estimation: {
+      mvp_budget: {
+        minimum: brief?.suggestedTotalBudgetUsd ? `$${Math.round(brief.suggestedTotalBudgetUsd * 0.75).toLocaleString()}` : "TBD",
+        expected: brief?.suggestedTotalBudgetUsd ? `$${brief.suggestedTotalBudgetUsd.toLocaleString()}` : "TBD",
+        high_end: brief?.suggestedTotalBudgetUsd ? `$${Math.round(brief.suggestedTotalBudgetUsd * 1.3).toLocaleString()}` : "TBD",
+      },
+    },
+  };
+}
+
+async function buildRoomDocumentPreview(room: InstanceType<typeof LiveRoom>, docType: string) {
+  const generated = await GeneratedDoc.findOne({ roomId: room._id, documentType: docType }).sort({ createdAt: -1 });
+  if (generated) {
+    return {
+      _id: generated._id,
+      title: generated.title,
+      documentType: generated.documentType,
+      content: generated.content,
+      messageCount: generated.messageCount,
+    };
+  }
+
+  const session = await findLaunchSessionForRoom(room);
+  const brief = room.aiScopedBrief as any;
+  const blueprint = await resolveBlueprintForRoom(room);
+  const standard = STANDARD_ROOM_DOCUMENTS.find((doc) => doc.docType === docType);
+  if (!standard) return null;
+
+  const contentByType: Record<string, unknown> = {
+    business_validation: session?.researchText ?? brief?.businessValidation ?? null,
+    business_blueprint: session?.technicalDocText ?? brief?.businessBlueprint ?? blueprint,
+    full_business_blueprint: blueprint,
+    executive_summary: blueprint?.executive_summary,
+    mvp_scope: blueprint?.mvp_definition,
+    technical_architecture: blueprint?.technical_architecture,
+    freelancer_hiring_brief: blueprint?.team_requirements,
+    roadmap_budget: {
+      development_roadmap: blueprint?.development_roadmap,
+      cost_estimation: blueprint?.cost_estimation,
+    },
+  };
+  const content = contentByType[docType];
+  return {
+    title: `${room.title} - ${standard.title}`,
+    documentType: docType,
+    content: safeJson(content, 12000),
+    messageCount: 0,
+  };
+}
+
+async function buildStandardRoomDocumentPdf(room: InstanceType<typeof LiveRoom>, docType: string): Promise<{ filename: string; buffer: Buffer } | null> {
+  const session = await findLaunchSessionForRoom(room);
+  const brief = room.aiScopedBrief as any;
+  const blueprint = await resolveBlueprintForRoom(room);
+  const filename = `${room.roomCode}-${docType.replace(/_/g, "-")}.pdf`;
+
+  if (docType === "business_validation") {
+    if (session?.researchText) return { filename, buffer: await getOrCreateBusinessValidationPdf(session) };
+    if (brief?.businessValidation) return { filename, buffer: await buildBusinessValidationPdf(`${room.title} - Business Validation`, brief.businessValidation) };
+    return null;
+  }
+  if (docType === "business_blueprint" || docType === "full_business_blueprint") {
+    if (session?.technicalDocText) return { filename, buffer: await getOrCreateBusinessBlueprintPdf(session) };
+    if (brief?.businessBlueprint) return { filename, buffer: await buildBusinessBlueprintPdf(`${room.title} - Business Blueprint`, brief.businessBlueprint) };
+    if (blueprint) return { filename, buffer: await buildBusinessBlueprintPdf(`${room.title} - Business Blueprint`, blueprint) };
+    return null;
+  }
+  if (!blueprint) return null;
+  if (docType === "executive_summary") return { filename, buffer: await buildExecutiveSummaryPdf(`${room.title} - Executive Summary`, blueprint) };
+  if (docType === "mvp_scope") return { filename, buffer: await buildMvpScopePdf(`${room.title} - MVP Scope Document`, blueprint) };
+  if (docType === "technical_architecture") return { filename, buffer: await buildTechnicalArchitecturePdf(`${room.title} - Technical Architecture`, blueprint) };
+  if (docType === "freelancer_hiring_brief") return { filename, buffer: await buildFreelancerHiringBriefPdf(`${room.title} - Freelancer Hiring Brief`, blueprint) };
+  if (docType === "roadmap_budget") return { filename, buffer: await buildRoadmapBudgetPdf(`${room.title} - Roadmap & Budget Plan`, blueprint) };
+  return null;
+}
+
 function formatStoredConversation(messages: any[], maxLength = 12000): string {
   const fullText = messages.map((msg) => `${msg.role === "assistant" ? "DEHIX AI" : msg.userName}: ${msg.message}`).join("\n\n");
   if (fullText.length <= maxLength) return fullText || "No previous conversation yet.";
@@ -923,138 +1460,28 @@ router.get("/:id/documents-zip", requireAuth, requireRoomAccess, async (req: Aut
       return;
     }
 
-    const isOwner = String(room.businessId) === req.userId;
-    const isParticipant = await RoomParticipant.exists({
-      roomId: room._id,
-      userId: req.userId,
-      status: { $in: ["joined", "accepted"] },
-    });
-    if (!isOwner && !isParticipant) {
-      res.status(403).json({ error: "You do not have access to this room documents" });
+    const docs = await getRoomDocumentCatalog(room, req.userId!);
+    if (!isRoomOwner(room, req.userId) && docs.length === 0) {
+      res.status(403).json({ error: "No room documents have been granted to you yet" });
       return;
     }
-
-    const session = await findLaunchSessionForRoom(room);
-    const brief = room.aiScopedBrief as any;
-
-    let blueprint: any = null;
-    if (session?.technicalDocText) {
-      try {
-        blueprint = JSON.parse(session.technicalDocText);
-      } catch (e) { }
-    }
-    if (!blueprint && brief?.businessBlueprint) {
-      blueprint = brief.businessBlueprint;
-    }
-
-    if (!blueprint) {
-      // Fallback mapping from Scoped Brief context so it never fails
-      blueprint = {
-        executive_summary: {
-          idea_name: room.title,
-          one_line_description: brief?.projectSummary || room.rawDescription,
-          business_goal: brief?.projectSummary || room.rawDescription,
-          target_market: "Global / Multi-region",
-          recommended_launch_strategy: "MVP Rollout"
-        },
-        problem_definition: {
-          problem_statement: room.rawDescription,
-          current_alternatives: ["Manual workflows"],
-          why_existing_solutions_fail: ["High friction, slow turnaround"]
-        },
-        product_strategy: {
-          core_value_proposition: brief?.projectSummary || "Streamlined Web3 hiring platform",
-          product_positioning: "MVP platform",
-          competitive_advantage: ["Automated matching", "Real-time collaboration"],
-          key_success_metrics: ["User conversion rate", "Task completion time"]
-        },
-        mvp_definition: {
-          must_have_features: brief?.tickets?.map((t: any) => ({ feature: t.title, purpose: t.description || "Core ticket task." })) || [],
-          should_have_features: [],
-          future_features: [],
-          excluded_from_mvp: []
-        },
-        technical_architecture: {
-          recommended_stack: {
-            frontend: "React / Vite / TailwindCSS",
-            backend: "Node.js / Express / Socket.io",
-            database: "MongoDB / Mongoose",
-            authentication: "JWT / Cookie Session",
-            cloud: "AWS / Vercel"
-          },
-          system_components: [
-            { component: "Frontend Portal", purpose: "Client interaction and UI dashboard" },
-            { component: "API Backend Server", purpose: "Business logic and database persistence" }
-          ],
-          api_modules: ["Auth", "Rooms", "Tickets", "Milestones"],
-          database_entities: ["User", "LiveRoom", "Ticket", "Milestone"]
-        },
-        development_roadmap: {
-          phase_1_discovery: { duration: "1 week", deliverables: ["Requirement spec", "Figma prototype"] },
-          phase_3_mvp_development: { duration: `${brief?.estimatedWeeks || 6} weeks`, deliverables: ["Frontend/Backend integration", "Production MVP"] }
-        },
-        team_requirements: {
-          recommended_team: brief?.roles?.map((r: any) => ({ role: r.roleTitle, responsibilities: r.responsibilities })) || [],
-          minimum_team: brief?.roles?.slice(0, 2)?.map((r: any) => r.roleTitle) || []
-        },
-        cost_estimation: {
-          mvp_budget: {
-            minimum: brief?.suggestedTotalBudgetUsd ? `$${Math.round(brief.suggestedTotalBudgetUsd * 0.75).toLocaleString()}` : "TBD",
-            expected: brief?.suggestedTotalBudgetUsd ? `$${brief.suggestedTotalBudgetUsd.toLocaleString()}` : "TBD",
-            high_end: brief?.suggestedTotalBudgetUsd ? `$${Math.round(brief.suggestedTotalBudgetUsd * 1.3).toLocaleString()}` : "TBD"
-          }
-        }
-      };
-    }
-
     const files: Array<{ filename: string; buffer: Buffer }> = [];
-
-    // 1. Full Business Blueprint PDF
-    try {
-      const fullBlueprint = await buildBusinessBlueprintPdf(`${room.title} - Full Business Blueprint`, blueprint);
-      files.push({ filename: `${room.roomCode}-1-full-business-blueprint.pdf`, buffer: fullBlueprint });
-    } catch (e) {
-      req.log.error({ err: e }, "Error compiling Full Business Blueprint PDF");
-    }
-
-    // 2. Executive Summary PDF
-    try {
-      const execSummary = await buildExecutiveSummaryPdf(`${room.title} - Executive Summary`, blueprint);
-      files.push({ filename: `${room.roomCode}-2-executive-summary.pdf`, buffer: execSummary });
-    } catch (e) {
-      req.log.error({ err: e }, "Error compiling Executive Summary PDF");
-    }
-
-    // 3. MVP Scope PDF
-    try {
-      const mvpScope = await buildMvpScopePdf(`${room.title} - MVP Scope Document`, blueprint);
-      files.push({ filename: `${room.roomCode}-3-mvp-scope.pdf`, buffer: mvpScope });
-    } catch (e) {
-      req.log.error({ err: e }, "Error compiling MVP Scope PDF");
-    }
-
-    // 4. Technical Architecture PDF
-    try {
-      const techArch = await buildTechnicalArchitecturePdf(`${room.title} - Technical Architecture`, blueprint);
-      files.push({ filename: `${room.roomCode}-4-technical-architecture.pdf`, buffer: techArch });
-    } catch (e) {
-      req.log.error({ err: e }, "Error compiling Technical Architecture PDF");
-    }
-
-    // 5. Freelancer Hiring Brief PDF
-    try {
-      const hiringBrief = await buildFreelancerHiringBriefPdf(`${room.title} - Freelancer Hiring Brief`, blueprint);
-      files.push({ filename: `${room.roomCode}-5-freelancer-hiring-brief.pdf`, buffer: hiringBrief });
-    } catch (e) {
-      req.log.error({ err: e }, "Error compiling Freelancer Hiring Brief PDF");
-    }
-
-    // 6. Roadmap & Budget PDF
-    try {
-      const roadmapBudget = await buildRoadmapBudgetPdf(`${room.title} - Roadmap & Budget Plan`, blueprint);
-      files.push({ filename: `${room.roomCode}-6-roadmap-and-budget.pdf`, buffer: roadmapBudget });
-    } catch (e) {
-      req.log.error({ err: e }, "Error compiling Roadmap & Budget PDF");
+    const { buildGeneratedDocPdf } = await import("../lib/reportPdf.js");
+    for (const doc of docs) {
+      try {
+        if (doc.source === "generated" && doc.documentId) {
+          const generated = await GeneratedDoc.findOne({ _id: doc.documentId, roomId: room._id });
+          if (generated) {
+            const buffer = await buildGeneratedDocPdf(generated.title, generated.documentType, generated.content);
+            files.push({ filename: `${room.roomCode}-${generated.documentType.replace(/_/g, "-")}.pdf`, buffer });
+          }
+        } else {
+          const built = await buildStandardRoomDocumentPdf(room, doc.docType);
+          if (built) files.push(built);
+        }
+      } catch (err) {
+        req.log.warn({ err, docType: doc.docType }, "Skipped document while building ZIP");
+      }
     }
 
     if (files.length === 0) {
@@ -1082,6 +1509,10 @@ router.get("/:id/export", requireAuth, requireRoomAccess, async (req: AuthReques
   try {
     const room = await LiveRoom.findById(req.params["id"]);
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
+    if (!isRoomOwner(room, req.userId)) {
+      res.status(403).json({ error: "Only the business owner can export the full room" });
+      return;
+    }
     const [roles, participants, tickets, milestones, nda] = await Promise.all([
       RoomRole.find({ roomId: room._id }),
       RoomParticipant.find({ roomId: room._id }).populate("userId", "name email"),
@@ -1536,6 +1967,17 @@ function formatRoom(room: InstanceType<typeof LiveRoom>) {
   };
 }
 
+function formatRoomForUser(room: InstanceType<typeof LiveRoom>, userId: string | undefined) {
+  const formatted = formatRoom(room);
+  if (isRoomOwner(room, userId)) return formatted;
+  return {
+    ...formatted,
+    rawDescription: "",
+    aiScopedBrief: null,
+    notes: null,
+  };
+}
+
 function formatRole(role: InstanceType<typeof RoomRole>) {
   return {
     _id: role._id,
@@ -1549,10 +1991,16 @@ function formatRole(role: InstanceType<typeof RoomRole>) {
 }
 
 function formatParticipant(p: InstanceType<typeof RoomParticipant>) {
+  const populatedUser = (p as any).userId?.email ? (p as any).userId : null;
+  const talentId = String(populatedUser?._id ?? p.userId);
   return {
     _id: p._id,
     userId: p.userId,
-    user: (p as any).userId?.email ? (p as any).userId : null,
+    talentId,
+    name: populatedUser?.name ?? "Talent",
+    email: populatedUser?.email ?? null,
+    avatarUrl: populatedUser?.avatarUrl ?? null,
+    user: populatedUser,
     roleId: p.roleId ?? null,
     status: p.status,
     joinedAt: p.joinedAt,

@@ -9,6 +9,9 @@ import { ProjectShortlist } from "./models/ProjectShortlist.js";
 import { ProjectEnquiry } from "./models/ProjectEnquiry.js";
 import { ProjectEnquiryRecipient } from "./models/ProjectEnquiryRecipient.js";
 import { Notification } from "./models/Notification.js";
+import { RoomChannel } from "./models/RoomChannel.js";
+import { RoomMessage } from "./models/RoomMessage.js";
+import { RoomDocumentPermission } from "./models/RoomDocumentPermission.js";
 import bcrypt from "bcryptjs";
 
 type TalentSeed = {
@@ -537,6 +540,9 @@ async function seed() {
     ProjectEnquiry.deleteMany({}),
     ProjectEnquiryRecipient.deleteMany({}),
     Notification.deleteMany({}),
+    RoomChannel.deleteMany({}),
+    RoomMessage.deleteMany({}),
+    RoomDocumentPermission.deleteMany({}),
   ]);
 
   const hashedPwd = await bcrypt.hash("demo123", 10);

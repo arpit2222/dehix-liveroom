@@ -11,6 +11,7 @@ import { ProjectEnquiryRecipient } from "../models/ProjectEnquiryRecipient.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { UpdateAvailabilityBody, RespondInviteBody } from "@workspace/api-zod";
 import { getIo } from "../socket.js";
+import { createTalentJoinedSystemMessage, ensureDirectChannelForParticipant, formatRoomChannel } from "../lib/roomWorkspace.js";
 
 const router = Router();
 
@@ -149,7 +150,7 @@ router.get("/invites", requireAuth, async (req: AuthRequest, res) => {
                 _id: room._id,
                 roomCode: room.roomCode,
                 title: room.title,
-                rawDescription: room.rawDescription,
+                rawDescription: "",
                 status: room.status,
                 meetLink: room.meetLink ?? null,
                 businessId: room.businessId,
@@ -184,7 +185,7 @@ router.get("/rooms", requireAuth, async (req: AuthRequest, res) => {
   try {
     const participants = await RoomParticipant.find({
       userId: req.userId,
-      status: "joined",
+      status: { $in: ["joined", "accepted"] },
     });
     const results = await Promise.all(
       participants.map(async (p) => {
@@ -205,7 +206,7 @@ router.get("/rooms", requireAuth, async (req: AuthRequest, res) => {
                 _id: room._id,
                 roomCode: room.roomCode,
                 title: room.title,
-                rawDescription: room.rawDescription,
+                rawDescription: "",
                 status: room.status,
                 meetLink: room.meetLink ?? null,
                 contractedAt: room.contractedAt ?? null,
@@ -259,7 +260,7 @@ router.get("/enquiries", requireAuth, async (req: AuthRequest, res) => {
               _id: room._id,
               roomCode: room.roomCode,
               title: room.title,
-              rawDescription: room.rawDescription,
+              rawDescription: "",
               status: room.status,
               meetLink: room.meetLink ?? null,
               businessId: room.businessId,
@@ -319,10 +320,21 @@ router.post("/respond-invite", requireAuth, async (req: AuthRequest, res) => {
     if (action === "accept" && participant.roleId) {
       await RoomRole.findByIdAndUpdate(participant.roleId, { status: "accepted", filledBy: req.userId });
     }
+    const room = await LiveRoom.findById(participant.roomId);
+    let directChannel = null;
+    if (action === "accept" && room) {
+      directChannel = await ensureDirectChannelForParticipant(room, participant);
+    }
     if (action === "accept") {
       RoomActivity.create({ roomId: String(participant.roomId), type: "participant_joined", actorId: req.userId }).catch(() => {});
     }
     const io = getIo();
+    if (action === "accept" && room) {
+      if (directChannel && io) {
+        io.to(`room:${participant.roomId}`).emit("room:channel_created", formatRoomChannel(directChannel));
+      }
+      await createTalentJoinedSystemMessage(room, participant, io);
+    }
     if (io) {
       io.to(`room:${participant.roomId}`).emit("room:participant_joined", {
         roomId: participant.roomId,

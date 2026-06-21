@@ -40,7 +40,7 @@ export function setupSocket(ioServer: Server): void {
         return;
       }
       socket.join(`room:${roomId}`);
-      socket.to(`room:${roomId}`).emit("room:participant_joined", { socketId: socket.id, roomId, userId: user.userId });
+      socket.to(`room:${roomId}`).emit("room:presence_joined", { socketId: socket.id, roomId, userId: user.userId });
       logger.info({ socketId: socket.id, userId: user.userId, roomId }, "Joined room");
     });
 
