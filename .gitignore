@@ -32,6 +32,7 @@ node_modules
 /connect.lock
 /coverage
 generated-reports/
+artifacts/api-server/.cache/
 .codex-logs/
 /libpeerconnection.log
 npm-debug.log
