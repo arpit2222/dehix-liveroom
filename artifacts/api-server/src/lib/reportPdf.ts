@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import puppeteer from "puppeteer";
 import { buildSimplePdf } from "./simplePdf.js";
 import { logger } from "./logger.js";
@@ -23,6 +24,19 @@ type ReportMeta = {
   region?: unknown;
   theme?: { brand: string; brandDark: string };
 };
+
+const SYSTEM_CHROME_PATHS = [
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+];
+
+function resolveChromeExecutablePath(): string | undefined {
+  const configuredPath = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
+  if (configuredPath) return configuredPath;
+  return SYSTEM_CHROME_PATHS.find((candidate) => existsSync(candidate));
+}
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -520,8 +534,13 @@ async function renderPdf(html: string): Promise<Buffer> {
   try {
     browser = await puppeteer.launch({
       headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--font-render-hinting=medium"],
+      executablePath: resolveChromeExecutablePath(),
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--font-render-hinting=medium",
+      ],
     });
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
@@ -534,7 +553,7 @@ async function renderPdf(html: string): Promise<Buffer> {
     });
     return Buffer.from(pdf);
   } catch (err) {
-    logger.error({ err }, "Puppeteer PDF render failed; falling back to simple PDF");
+    logger.warn({ err }, "Puppeteer PDF render failed; falling back to simple PDF");
     return buildSimplePdf("DEHIX Report", [
       {
         text: "Styled PDF rendering failed in this environment, so this fallback PDF contains the report content in a simplified format.",
