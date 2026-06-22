@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import puppeteer from "puppeteer";
+import path from "node:path";
 import { buildSimplePdf } from "./simplePdf.js";
 import { logger } from "./logger.js";
 
@@ -32,10 +32,35 @@ const SYSTEM_CHROME_PATHS = [
   "/usr/bin/chromium",
 ];
 
-function resolveChromeExecutablePath(): string | undefined {
+type PuppeteerModule = typeof import("puppeteer");
+
+function resolvePuppeteerCacheDir(): string {
+  const configuredPath = process.env.PUPPETEER_CACHE_DIR?.trim();
+  if (configuredPath) return configuredPath;
+
+  const candidates = [
+    path.resolve(process.cwd(), ".cache", "puppeteer"),
+    path.resolve(process.cwd(), "artifacts", "api-server", ".cache", "puppeteer"),
+    path.resolve(process.cwd(), "..", "..", "artifacts", "api-server", ".cache", "puppeteer"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
+}
+
+function ensurePuppeteerCacheDir() {
+  process.env.PUPPETEER_CACHE_DIR ||= resolvePuppeteerCacheDir();
+}
+
+function resolveChromeExecutablePath(puppeteer: PuppeteerModule["default"]): string | undefined {
   const configuredPath = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
   if (configuredPath) return configuredPath;
-  return SYSTEM_CHROME_PATHS.find((candidate) => existsSync(candidate));
+  const systemPath = SYSTEM_CHROME_PATHS.find((candidate) => existsSync(candidate));
+  if (systemPath) return systemPath;
+
+  try {
+    return puppeteer.executablePath();
+  } catch {
+    return undefined;
+  }
 }
 
 function escapeHtml(value: unknown): string {
@@ -529,12 +554,16 @@ function htmlToPlainText(html: string): string {
 }
 
 async function renderPdf(html: string): Promise<Buffer> {
-  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null;
+  let browser: import("puppeteer").Browser | null = null;
+  let executablePath: string | undefined;
 
   try {
+    ensurePuppeteerCacheDir();
+    const puppeteer = (await import("puppeteer")).default;
+    executablePath = resolveChromeExecutablePath(puppeteer);
     browser = await puppeteer.launch({
       headless: true,
-      executablePath: resolveChromeExecutablePath(),
+      executablePath,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -553,7 +582,14 @@ async function renderPdf(html: string): Promise<Buffer> {
     });
     return Buffer.from(pdf);
   } catch (err) {
-    logger.warn({ err }, "Puppeteer PDF render failed; falling back to simple PDF");
+    logger.warn(
+      {
+        err,
+        chromeExecutablePath: executablePath ?? null,
+        puppeteerCacheDir: process.env.PUPPETEER_CACHE_DIR ?? null,
+      },
+      "Puppeteer PDF render failed; falling back to simple PDF"
+    );
     return buildSimplePdf("DEHIX Report", [
       {
         text: "Styled PDF rendering failed in this environment, so this fallback PDF contains the report content in a simplified format.",
