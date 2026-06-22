@@ -7,16 +7,7 @@ import { toast } from "sonner";
 
 type WizardPhase = "idea" | "analysis" | "technical" | "blueprint" | "recommendations";
 type PhaseJobStatus = "queued" | "generating" | "ready" | "failed";
-type LaunchReportPhase = "analysis" | "blueprint";
-type ReportSectionStatus = "idle" | "generating" | "ready" | "failed";
 type LaunchJob = { phase: "analysis" | "blueprint"; sessionId: string; status: PhaseJobStatus };
-type ApiReportSectionStatus = {
-  phase: LaunchReportPhase;
-  sectionKey: string;
-  status: ReportSectionStatus;
-  generatedAt?: string;
-  error?: string;
-};
 type ReportSection = {
   id: string;
   title: string;
@@ -262,18 +253,6 @@ function stringifyForSearch(value: unknown): string {
   return "";
 }
 
-function reportSectionStatusKey(phase: LaunchReportPhase, sectionKey: string) {
-  return `${phase}:${sectionKey}`;
-}
-
-function normalizeReportSectionStatuses(items?: ApiReportSectionStatus[]): Record<string, ReportSectionStatus> {
-  if (!Array.isArray(items)) return {};
-  return items.reduce<Record<string, ReportSectionStatus>>((acc, item) => {
-    acc[reportSectionStatusKey(item.phase, item.sectionKey)] = item.status ?? "idle";
-    return acc;
-  }, {});
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -381,16 +360,10 @@ function ReportReader({
   sections,
   initialSectionId,
   onSectionChange,
-  onSectionOpen,
-  sectionStatusById,
-  loadingSectionId,
 }: {
   sections: ReportSection[];
   initialSectionId?: string;
   onSectionChange?: (section: ActiveReportSection) => void;
-  onSectionOpen?: (section: ActiveReportSection) => void | Promise<void>;
-  sectionStatusById?: Record<string, ReportSectionStatus>;
-  loadingSectionId?: string | null;
 }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(initialSectionId ?? sections[0]?.id ?? "");
@@ -401,8 +374,6 @@ function ReportReader({
       )
     : sections;
   const selectedSection = filteredSections.find((section) => section.id === selectedId) ?? filteredSections[0] ?? sections[0];
-  const selectedSectionStatus = selectedSection ? sectionStatusById?.[selectedSection.id] ?? "idle" : "idle";
-  const selectedSectionLoading = Boolean(selectedSection && (loadingSectionId === selectedSection.id || selectedSectionStatus === "generating"));
 
   useEffect(() => {
     if (selectedSection) {
@@ -429,30 +400,6 @@ function ReportReader({
     return <ArrowRight className="h-4 w-4 shrink-0" />;
   };
 
-  const selectSection = (section: ReportSection) => {
-    setSelectedId(section.id);
-    void onSectionOpen?.({
-      id: section.id,
-      title: section.title,
-      description: section.description,
-    });
-  };
-
-  const renderStatusBadge = (sectionId: string) => {
-    const status = sectionStatusById?.[sectionId] ?? "idle";
-    const loading = loadingSectionId === sectionId || status === "generating";
-    if (loading) {
-      return <RefreshCw className="h-3 w-3 animate-spin text-primary" />;
-    }
-    if (status === "ready") {
-      return <span className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-500">Ready</span>;
-    }
-    if (status === "failed") {
-      return <span className="rounded-full bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-bold text-rose-500">Retry</span>;
-    }
-    return <span className="rounded-full bg-muted/60 px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground/70">Open</span>;
-  };
-
   return (
     <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
       <aside className="rounded-2xl border border-border/50 bg-card/60 backdrop-blur-md p-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto shadow-md">
@@ -471,7 +418,7 @@ function ReportReader({
             return (
               <button
                 key={section.id}
-                onClick={() => selectSection(section)}
+                onClick={() => setSelectedId(section.id)}
                 className={`group w-full flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-200 hover:scale-[1.01] ${
                   active
                     ? "border-primary/30 bg-gradient-to-r from-primary/15 to-primary/5 text-primary shadow-sm"
@@ -486,10 +433,7 @@ function ReportReader({
                   {getSectionIcon(section.id)}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <span className="flex min-w-0 items-center justify-between gap-2 text-xs font-bold tracking-tight">
-                    <span className="truncate">{section.title}</span>
-                    {renderStatusBadge(section.id)}
-                  </span>
+                  <span className="block text-xs font-bold tracking-tight truncate">{section.title}</span>
                   {section.description && (
                     <span className="mt-1 block text-[10px] leading-relaxed opacity-75 truncate">
                       {section.description}
@@ -531,12 +475,6 @@ function ReportReader({
                 </div>
               )}
             </div>
-            {selectedSectionLoading && (
-              <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/10 px-4 py-3 text-xs font-medium text-primary">
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                Loading richer detail for this section...
-              </div>
-            )}
             <div className="animate-in fade-in-50 slide-in-from-bottom-2 duration-300 text-foreground/90 leading-relaxed text-sm">
               {selectedSection.body}
             </div>
@@ -1179,22 +1117,13 @@ const BLUEPRINT_SECTION_DESCRIPTIONS: Record<string, string> = {
 function BlueprintReport({
   blueprint,
   onSectionChange,
-  onSectionHydrate,
-  sectionStatusById,
-  loadingSectionId,
 }: {
   blueprint: BlueprintResult;
   onSectionChange?: (section: ActiveReportSection) => void;
-  onSectionHydrate?: (sectionKey: string) => void | Promise<void>;
-  sectionStatusById?: Record<string, ReportSectionStatus>;
-  loadingSectionId?: string | null;
 }) {
   const orderedSections = BLUEPRINT_SECTION_ORDER
-    .filter((key) => key !== "next_options")
+    .filter((key) => blueprint[key] !== undefined)
     .map((key) => [key, blueprint[key]] as const);
-  if (blueprint.next_options !== undefined) {
-    orderedSections.push(["next_options", blueprint.next_options]);
-  }
   const remainingSections = Object.entries(blueprint).filter(
     ([key]) => !BLUEPRINT_SECTION_ORDER.includes(key) && key !== "step"
   );
@@ -1203,35 +1132,18 @@ function BlueprintReport({
     title: humanizeKey(key),
     description: BLUEPRINT_SECTION_DESCRIPTIONS[key] ?? "Additional generated report detail.",
     keywords: stringifyForSearch(value),
-    body: value === undefined
-      ? <p className="text-sm text-muted-foreground">Open this section to generate detailed content.</p>
-      : renderBlueprintSection(key, value),
+    body: renderBlueprintSection(key, value),
   }));
 
-  return (
-    <ReportReader
-      sections={sections}
-      initialSectionId="executive_summary"
-      onSectionChange={onSectionChange}
-      onSectionOpen={(section) => onSectionHydrate?.(section.id)}
-      sectionStatusById={sectionStatusById}
-      loadingSectionId={loadingSectionId}
-    />
-  );
+  return <ReportReader sections={sections} initialSectionId="executive_summary" onSectionChange={onSectionChange} />;
 }
 
 function AnalysisDetails({
   analysis,
   onSectionChange,
-  onSectionHydrate,
-  sectionStatusById,
-  loadingSectionId,
 }: {
   analysis: AnalysisResult;
   onSectionChange?: (section: ActiveReportSection) => void;
-  onSectionHydrate?: (sectionKey: string) => void | Promise<void>;
-  sectionStatusById?: Record<string, ReportSectionStatus>;
-  loadingSectionId?: string | null;
 }) {
   const research = analysis.research_analysis;
   const scores = research?.dimensional_scores ?? {};
@@ -1375,16 +1287,7 @@ function AnalysisDetails({
     },
   ];
 
-  return (
-    <ReportReader
-      sections={sections}
-      initialSectionId="scores"
-      onSectionChange={onSectionChange}
-      onSectionOpen={(section) => onSectionHydrate?.(section.id)}
-      sectionStatusById={sectionStatusById}
-      loadingSectionId={loadingSectionId}
-    />
-  );
+  return <ReportReader sections={sections} initialSectionId="scores" onSectionChange={onSectionChange} />;
 }
 
 function buildSmartSuggestions({
@@ -1511,8 +1414,6 @@ export default function CreateRoom() {
   const [chatInput, setChatInput] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [activeReportSection, setActiveReportSection] = useState<ActiveReportSection | null>(null);
-  const [reportSectionStatuses, setReportSectionStatuses] = useState<Record<string, ReportSectionStatus>>({});
-  const [loadingReportSection, setLoadingReportSection] = useState<string | null>(null);
   const [activeQuestion, setActiveQuestion] = useState<ActiveQuestion | null>(null);
   const [suggestingId, setSuggestingId] = useState<string | null>(null);
   const [usedAiSuggest, setUsedAiSuggest] = useState<Record<string, boolean>>({});
@@ -1537,25 +1438,6 @@ export default function CreateRoom() {
   const scrollChatToBottom = () => {
     setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   };
-
-  const updateReportSectionStatuses = (items?: ApiReportSectionStatus[]) => {
-    const normalized = normalizeReportSectionStatuses(items);
-    if (Object.keys(normalized).length > 0) {
-      setReportSectionStatuses((prev) => ({ ...prev, ...normalized }));
-    }
-  };
-
-  const getSectionStatusesForPhase = (reportPhase: LaunchReportPhase) =>
-    Object.fromEntries(
-      Object.entries(reportSectionStatuses)
-        .filter(([key]) => key.startsWith(`${reportPhase}:`))
-        .map(([key, status]) => [key.slice(reportPhase.length + 1), status])
-    ) as Record<string, ReportSectionStatus>;
-
-  const getLoadingSectionIdForPhase = (reportPhase: LaunchReportPhase) =>
-    loadingReportSection?.startsWith(`${reportPhase}:`)
-      ? loadingReportSection.slice(reportPhase.length + 1)
-      : null;
 
   const handleAiSuggest = async (questionId: string, questionText: string) => {
     if (suggestingId) return;
@@ -1715,7 +1597,6 @@ Please return ONLY the modified answer itself, without any introductory or conve
         if (data.session) setSessionData(data.session);
         if (data.analysis) setAnalysis(data.analysis);
         if (data.blueprint) setBlueprint(data.blueprint);
-        updateReportSectionStatuses(data.sections);
 
         const status: PhaseJobStatus =
           launchJob.phase === "analysis"
@@ -1754,7 +1635,7 @@ Please return ONLY the modified answer itself, without any introductory or conve
     };
 
     pollStatus();
-    intervalId = setInterval(pollStatus, 1200);
+    intervalId = setInterval(pollStatus, 2500);
 
     return () => {
       cancelled = true;
@@ -1832,37 +1713,6 @@ Please return ONLY the modified answer itself, without any introductory or conve
     }
   };
 
-  const loadReportSection = async (reportPhase: LaunchReportPhase, sectionKey: string) => {
-    if (!sessionData?._id) return;
-    if (sectionKey === "next_options") return;
-    const statusKey = reportSectionStatusKey(reportPhase, sectionKey);
-    if (loadingReportSection === statusKey || reportSectionStatuses[statusKey] === "ready") return;
-
-    setLoadingReportSection(statusKey);
-    setReportSectionStatuses((prev) => ({ ...prev, [statusKey]: "generating" }));
-
-    try {
-      const res = await fetch(`/api/launch/${sessionData._id}/sections/${reportPhase}/${sectionKey}`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!res.ok) {
-        throw new Error(await readApiError(res, "Failed to load report section"));
-      }
-      const data = await res.json();
-      if (data.session) setSessionData(data.session);
-      if (data.analysis) setAnalysis(data.analysis);
-      if (data.blueprint) setBlueprint(data.blueprint);
-      updateReportSectionStatuses(data.sections);
-      setReportSectionStatuses((prev) => ({ ...prev, [statusKey]: "ready" }));
-    } catch (err: any) {
-      const msg = err?.message ?? "Failed to load report section";
-      setReportSectionStatuses((prev) => ({ ...prev, [statusKey]: "failed" }));
-      toast.error(msg);
-    } finally {
-      setLoadingReportSection((current) => current === statusKey ? null : current);
-    }
-  };
-
   if (!isAuthenticated || user?.role !== "business") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -1879,8 +1729,6 @@ Please return ONLY the modified answer itself, without any introductory or conve
     setValidating(true);
     setError("");
     setPhase1ReviewTouched(false);
-    setReportSectionStatuses({});
-    setLoadingReportSection(null);
     try {
       const title = description.trim().slice(0, 60) + (description.length > 60 ? "..." : "");
       const res = await fetch("/api/launch", {
@@ -2120,9 +1968,6 @@ Please return ONLY the modified text itself, without any introductory or convers
         setPhase1Review(buildPhase1ReviewForm(data.analysis));
       }
       setBlueprint(data.blueprint ?? null);
-      if (data.sections) {
-        setReportSectionStatuses(normalizeReportSectionStatuses(data.sections));
-      }
       setTalentRecommendationReport(null);
       setPhase1ReviewTouched(false);
       return true;
@@ -2246,9 +2091,6 @@ Please return ONLY the modified text itself, without any introductory or convers
 
     setGeneratingBlueprint(true);
     setError("");
-    setReportSectionStatuses((prev) =>
-      Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith("blueprint:"))) as Record<string, ReportSectionStatus>
-    );
     try {
       const allQuestions = [...mandatoryQuestions, ...optionalQuestions];
       const answersPayload = allQuestions
@@ -2678,13 +2520,7 @@ Please return ONLY the modified text itself, without any introductory or convers
                 </div>
               )}
 
-              <AnalysisDetails
-                analysis={analysis}
-                onSectionChange={setActiveReportSection}
-                onSectionHydrate={(sectionKey) => loadReportSection("analysis", sectionKey)}
-                sectionStatusById={getSectionStatusesForPhase("analysis")}
-                loadingSectionId={getLoadingSectionIdForPhase("analysis")}
-              />
+              <AnalysisDetails analysis={analysis} onSectionChange={setActiveReportSection} />
 
               <div className="flex items-center gap-3 pt-4 border-t border-border/40">
                 <Button className="flex-1 h-12 text-base font-semibold" onClick={confirmPhase1AndLoadQuestions} disabled={loadingQuestions || savingPhase1Review}>
@@ -3035,13 +2871,7 @@ Please return ONLY the modified text itself, without any introductory or convers
                 </div>
               </div>
 
-              <BlueprintReport
-                blueprint={blueprint}
-                onSectionChange={setActiveReportSection}
-                onSectionHydrate={(sectionKey) => loadReportSection("blueprint", sectionKey)}
-                sectionStatusById={getSectionStatusesForPhase("blueprint")}
-                loadingSectionId={getLoadingSectionIdForPhase("blueprint")}
-              />
+              <BlueprintReport blueprint={blueprint} onSectionChange={setActiveReportSection} />
             </div>
           )
         )}

@@ -12,7 +12,6 @@ import { Notification } from "./models/Notification.js";
 import { RoomChannel } from "./models/RoomChannel.js";
 import { RoomMessage } from "./models/RoomMessage.js";
 import { RoomDocumentPermission } from "./models/RoomDocumentPermission.js";
-import { LaunchReportSection } from "./models/LaunchReportSection.js";
 import bcrypt from "bcryptjs";
 
 type TalentSeed = {
@@ -544,7 +543,6 @@ async function seed() {
     RoomChannel.deleteMany({}),
     RoomMessage.deleteMany({}),
     RoomDocumentPermission.deleteMany({}),
-    LaunchReportSection.deleteMany({}),
   ]);
 
   const hashedPwd = await bcrypt.hash("demo123", 10);

@@ -1,5 +1,4 @@
 import { Router, type Response } from "express";
-import { createHash } from "node:crypto";
 import mongoose from "mongoose";
 import { azureOpenai, azureOpenAiDeployment, isAiProviderEnabled, missingAiProviderEnvVars } from "../lib/openai.js";
 import {
@@ -11,7 +10,6 @@ import {
 import { TECH_MANDATORY_QUESTIONS, getMandatoryQuestion } from "../lib/launchQuestions.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { LaunchSession } from "../models/LaunchSession.js";
-import { LaunchReportSection, type LaunchReportPhase } from "../models/LaunchReportSection.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
@@ -22,37 +20,6 @@ import { ConfirmPhase1OutputBody, CreateLaunchSessionBody, ScopeLaunchSessionBod
 import { getIo } from "../socket.js";
 
 const router = Router();
-
-function envInt(name: string, fallback: number, min: number, max: number): number {
-  const parsed = Number(process.env[name]);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(min, Math.min(max, Math.round(parsed)));
-}
-
-const PHASE1_OVERVIEW_MAX_TOKENS = envInt("LAUNCH_PHASE1_OVERVIEW_MAX_TOKENS", 2800, 1800, 4096);
-const BLUEPRINT_OVERVIEW_MAX_TOKENS = envInt("LAUNCH_BLUEPRINT_OVERVIEW_MAX_TOKENS", 4200, 3000, 8192);
-const LAUNCH_REPORT_SECTION_MAX_TOKENS = envInt("LAUNCH_REPORT_SECTION_MAX_TOKENS", 4200, 2200, 8192);
-const OPTIONAL_QUESTIONS_MAX_TOKENS = envInt("LAUNCH_OPTIONAL_QUESTIONS_MAX_TOKENS", 768, 256, 1536);
-
-const ANALYSIS_SECTION_KEYS = ["scores", "market", "business", "risks", "swot", "assumptions"] as const;
-const BLUEPRINT_SECTION_KEYS = [
-  "executive_summary",
-  "problem_definition",
-  "target_users",
-  "product_strategy",
-  "mvp_definition",
-  "user_journey",
-  "technical_architecture",
-  "security_and_compliance",
-  "development_roadmap",
-  "team_requirements",
-  "cost_estimation",
-  "business_model",
-  "go_to_market",
-  "risk_analysis",
-  "founder_recommendations",
-  "final_verdict",
-] as const;
 
 function requireAiProvider(res: Response): boolean {
   if (isAiProviderEnabled) {
@@ -309,305 +276,6 @@ function formatBusinessBlueprintLines(blueprint: any): Array<{ text: string; siz
   }
 
   return lines;
-}
-
-function deepMergeReport(base: Record<string, any>, patch: Record<string, any>): Record<string, any> {
-  for (const [key, value] of Object.entries(patch)) {
-    if (
-      value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      base[key] &&
-      typeof base[key] === "object" &&
-      !Array.isArray(base[key])
-    ) {
-      deepMergeReport(base[key], value);
-    } else {
-      base[key] = value;
-    }
-  }
-  return base;
-}
-
-function sectionKeyAllowed(phase: LaunchReportPhase, sectionKey: string): boolean {
-  return phase === "analysis"
-    ? (ANALYSIS_SECTION_KEYS as readonly string[]).includes(sectionKey)
-    : (BLUEPRINT_SECTION_KEYS as readonly string[]).includes(sectionKey);
-}
-
-function stableSectionHash(session: any, phase: LaunchReportPhase, sectionKey: string): string {
-  const analysis = parseStoredJson<any>(session.researchText) ?? {};
-  const stableAnalysisInputs = {
-    region_used: analysis?.region_used,
-    idea_summary: analysis?.idea_summary,
-    business_confirmed_inputs: analysis?.business_confirmed_inputs,
-  };
-  const source = {
-    phase,
-    sectionKey,
-    rawIdea: session.rawIdea,
-    projectTitle: session.projectTitle,
-    phase1ConfirmedAt: session.phase1ConfirmedAt?.toISOString?.() ?? null,
-    analysisInputs: stableAnalysisInputs,
-    technicalAnswersText: phase === "blueprint" ? session.technicalAnswersText ?? "" : "",
-  };
-  return createHash("sha256").update(JSON.stringify(source)).digest("hex");
-}
-
-async function getLaunchSectionStatuses(sessionId: mongoose.Types.ObjectId) {
-  const docs = await LaunchReportSection.find({ sessionId }).lean();
-  const byKey = new Map(docs.map((doc) => [`${doc.phase}:${doc.sectionKey}`, doc]));
-  return [
-    ...ANALYSIS_SECTION_KEYS.map((sectionKey) => {
-      const doc = byKey.get(`analysis:${sectionKey}`);
-      return {
-        phase: "analysis",
-        sectionKey,
-        status: doc?.status ?? "idle",
-        generatedAt: doc?.generatedAt,
-        error: doc?.error,
-      };
-    }),
-    ...BLUEPRINT_SECTION_KEYS.map((sectionKey) => {
-      const doc = byKey.get(`blueprint:${sectionKey}`);
-      return {
-        phase: "blueprint",
-        sectionKey,
-        status: doc?.status ?? "idle",
-        generatedAt: doc?.generatedAt,
-        error: doc?.error,
-      };
-    }),
-  ];
-}
-
-function mergeAnalysisSection(analysis: any, sectionKey: string, content: any): any {
-  const next = ensureDefaultRegion(analysis && typeof analysis === "object" ? analysis : {});
-  const patch = content?.research_analysis
-    ? content
-    : { research_analysis: content && typeof content === "object" ? content : {} };
-  deepMergeReport(next, patch);
-  if (sectionKey === "scores") {
-    next.research_analysis ??= {};
-  }
-  return ensureDefaultRegion(next);
-}
-
-function mergeBlueprintSection(blueprint: any, sectionKey: string, content: any): any {
-  const next = blueprint && typeof blueprint === "object" ? blueprint : {};
-  const patch = content && typeof content === "object" && content[sectionKey] !== undefined
-    ? content
-    : { [sectionKey]: content };
-  return deepMergeReport(next, patch);
-}
-
-function buildAnalysisSectionPrompt(session: any, sectionKey: string): string {
-  const currentAnalysis = ensureDefaultRegion(parseStoredJson<any>(session.researchText) ?? {});
-  const sectionContracts: Record<string, string> = {
-    scores: `Return:
-{
-  "research_analysis": {
-    "dimensional_scores": {
-      "market_opportunity": number,
-      "problem_clarity": number,
-      "solution_differentiation": number,
-      "execution_feasibility": number,
-      "revenue_potential": number
-    },
-    "overall_score": number,
-    "final_verdict": "Viable | Needs Work | Not Recommended",
-    "verdict_reasoning": "string"
-  }
-}`,
-    market: `Return:
-{
-  "research_analysis": {
-    "market_demand": "string",
-    "target_audience": "string",
-    "competitor_analysis": "string",
-    "competitive_moat": "string",
-    "go_to_market_strategy": "string"
-  }
-}`,
-    business: `Return:
-{
-  "research_analysis": {
-    "revenue_model": "string",
-    "unit_economics": "string",
-    "cost_estimation": "string"
-  }
-}`,
-    risks: `Return:
-{
-  "research_analysis": {
-    "risks": ["5 specific risks"],
-    "suggestions": ["5 actionable suggestions"]
-  }
-}`,
-    swot: `Return:
-{
-  "research_analysis": {
-    "swot": {
-      "strengths": ["5 strings"],
-      "weaknesses": ["5 strings"],
-      "opportunities": ["5 strings"],
-      "threats": ["5 strings"]
-    }
-  }
-}`,
-    assumptions: `Return:
-{
-  "research_analysis": {
-    "assumptions": ["5 important assumptions"]
-  }
-}`,
-  };
-
-  return `You are DEHIX_Idea_Analysis_Section_Generator.
-
-Generate only the requested Phase 1 business analysis section.
-Be concrete, practical, region-aware, and critical.
-Use the current overview as context, but improve the requested section with more depth.
-Do not repeat unrelated sections.
-Return ONLY valid JSON.
-
-Original idea:
-${session.rawIdea}
-
-Current Phase 1 overview:
-${JSON.stringify(currentAnalysis, null, 2)}
-
-Requested section: ${sectionKey}
-
-${sectionContracts[sectionKey]}`;
-}
-
-function buildBlueprintSectionPrompt(session: any, sectionKey: string): string {
-  const businessAnalysis = ensureDefaultRegion(parseStoredJson<any>(session.researchText) ?? {});
-  const currentBlueprint = parseStoredJson<any>(session.technicalDocText) ?? {};
-  const sectionContracts: Record<string, string> = {
-    executive_summary: `"executive_summary": { "idea_name": "string", "one_line_description": "string", "business_goal": "string", "target_market": "string", "recommended_launch_strategy": "string" }`,
-    problem_definition: `"problem_definition": { "problem_statement": "string", "current_alternatives": ["string"], "why_existing_solutions_fail": ["string"] }`,
-    target_users: `"target_users": { "primary_users": [{ "persona": "string", "description": "string", "pain_points": ["2 to 4 strings"], "goals": ["2 to 4 strings"] }], "secondary_users": [{ "persona": "string", "description": "string" }] }`,
-    product_strategy: `"product_strategy": { "core_value_proposition": "string", "product_positioning": "string", "competitive_advantage": ["string"], "key_success_metrics": ["string"] }`,
-    mvp_definition: `"mvp_definition": { "must_have_features": [{ "feature": "string", "purpose": "string", "priority": "Critical | High" }], "should_have_features": [{ "feature": "string", "purpose": "string" }], "future_features": [{ "feature": "string", "reason": "string" }], "excluded_from_mvp": ["string"] }`,
-    user_journey: `"user_journey": { "onboarding_flow": ["string"], "main_user_flow": ["string"], "retention_flow": ["string"] }`,
-    technical_architecture: `"technical_architecture": { "recommended_stack": { "frontend": "string", "backend": "string", "database": "string", "authentication": "string", "cloud": "string", "storage": "string", "ai_services": "string", "third_party_services": ["string"] }, "system_components": [{ "component": "string", "purpose": "string" }], "api_modules": ["string"], "database_entities": ["string"] }`,
-    security_and_compliance: `"security_and_compliance": { "security_requirements": ["string"], "privacy_requirements": ["string"], "compliance_requirements": ["string"] }`,
-    development_roadmap: `"development_roadmap": { "phase_1_discovery": { "duration": "string", "deliverables": ["string"] }, "phase_2_design": { "duration": "string", "deliverables": ["string"] }, "phase_3_mvp_development": { "duration": "string", "deliverables": ["string"] }, "phase_4_testing": { "duration": "string", "deliverables": ["string"] }, "phase_5_launch": { "duration": "string", "deliverables": ["string"] } }`,
-    team_requirements: `"team_requirements": { "recommended_team": [{ "role": "string", "responsibilities": ["2 to 4 strings"], "estimated_hours": number, "seniority": "Junior | Mid | Senior" }], "minimum_team": ["string"] }`,
-    cost_estimation: `"cost_estimation": { "mvp_budget": { "minimum": "string", "expected": "string", "high_end": "string" }, "monthly_operational_cost": { "minimum": "string", "expected": "string", "high_end": "string" }, "major_cost_drivers": ["string"] }`,
-    business_model: `"business_model": { "primary_revenue_streams": ["string"], "secondary_revenue_streams": ["string"], "pricing_strategy": "string" }`,
-    go_to_market: `"go_to_market": { "launch_channels": ["string"], "customer_acquisition_strategy": ["string"], "early_growth_strategy": ["string"] }`,
-    risk_analysis: `"risk_analysis": { "business_risks": [{ "risk": "string", "mitigation": "string" }], "technical_risks": [{ "risk": "string", "mitigation": "string" }], "market_risks": [{ "risk": "string", "mitigation": "string" }] }`,
-    founder_recommendations: `"founder_recommendations": { "before_building": ["string"], "during_development": ["string"], "before_launch": ["string"] }`,
-    final_verdict: `"final_verdict": { "build_now_or_not": "Build Now | Validate Further | Not Recommended", "reasoning": "string", "mvp_confidence_score": number }`,
-  };
-
-  return `You are DEHIX_Business_Development_Blueprint_Section_Generator.
-
-Generate only the requested Phase 2 blueprint section.
-Be concrete, founder-friendly, execution-focused, and realistic.
-Use the business analysis and Phase 2 answers as source context.
-Do not regenerate unrelated sections.
-Return ONLY valid JSON in this shape:
-{ ${sectionContracts[sectionKey]} }
-
-Original idea:
-${session.rawIdea}
-
-Business analysis:
-${JSON.stringify(businessAnalysis, null, 2)}
-
-Mandatory and optional Phase 2 answers:
-${session.technicalAnswersText ?? "No technical answers saved."}
-
-Current blueprint overview:
-${JSON.stringify(currentBlueprint, null, 2)}
-
-Requested section: ${sectionKey}`;
-}
-
-async function generateLaunchReportSection(session: any, phase: LaunchReportPhase, sectionKey: string, force = false) {
-  if (!sectionKeyAllowed(phase, sectionKey)) {
-    const err = new Error("Unknown report section");
-    (err as any).statusCode = 404;
-    throw err;
-  }
-
-  if (phase === "analysis" && !session.researchText) {
-    const err = new Error("Generate the business analysis first");
-    (err as any).statusCode = 400;
-    throw err;
-  }
-
-  if (phase === "blueprint" && !session.technicalDocText) {
-    const err = new Error("Generate the blueprint overview first");
-    (err as any).statusCode = 400;
-    throw err;
-  }
-
-  const sourceHash = stableSectionHash(session, phase, sectionKey);
-  const existing = await LaunchReportSection.findOne({ sessionId: session._id, phase, sectionKey });
-  if (!force && existing?.status === "ready" && existing.sourceHash === sourceHash && existing.content) {
-    return parseStoredJson<any>(existing.content) ?? {};
-  }
-
-  await LaunchReportSection.findOneAndUpdate(
-    { sessionId: session._id, phase, sectionKey },
-    { status: "generating", sourceHash, error: undefined },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
-
-  try {
-    const prompt = phase === "analysis"
-      ? buildAnalysisSectionPrompt(session, sectionKey)
-      : buildBlueprintSectionPrompt(session, sectionKey);
-    const completion = await azureOpenai.chat.completions.create({
-      model: azureOpenAiDeployment,
-      messages: [{ role: "user", content: prompt }],
-      max_completion_tokens: LAUNCH_REPORT_SECTION_MAX_TOKENS,
-    });
-    const content = parseAiJson<any>(completion.choices[0]?.message?.content ?? "{}");
-
-    if (phase === "analysis") {
-      const analysis = mergeAnalysisSection(parseStoredJson<any>(session.researchText) ?? {}, sectionKey, content);
-      session.researchText = JSON.stringify(analysis);
-      session.summaryText = analysis?.idea_summary ?? session.summaryText;
-      session.businessValidationPdfHash = undefined;
-      session.businessValidationPdfGeneratedAt = undefined;
-      await session.save();
-      warmBusinessValidationPdf(session);
-    } else {
-      const blueprint = mergeBlueprintSection(parseStoredJson<any>(session.technicalDocText) ?? {}, sectionKey, content);
-      session.technicalDocText = JSON.stringify(blueprint);
-      session.businessBlueprintPdfHash = undefined;
-      session.businessBlueprintPdfGeneratedAt = undefined;
-      await session.save();
-      warmBusinessBlueprintPdf(session);
-    }
-
-    await LaunchReportSection.findOneAndUpdate(
-      { sessionId: session._id, phase, sectionKey },
-      {
-        status: "ready",
-        content: JSON.stringify(content),
-        sourceHash,
-        error: undefined,
-        generatedAt: new Date(),
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-
-    return content;
-  } catch (err) {
-    await LaunchReportSection.findOneAndUpdate(
-      { sessionId: session._id, phase, sectionKey },
-      { status: "failed", sourceHash, error: errorMessage(err) },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-    throw err;
-  }
 }
 
 function validateMandatoryAnswers(answers: Array<{ questionId: string; answer: string }>): string[] {
@@ -1083,10 +751,6 @@ Rules:
 - Score each dimension from 0 to 10.
 - Be critical. Most ideas should score between 4 and 7. Reserve 8+ only for genuinely strong ideas.
 - Use practical market reasoning. If exact research is unavailable, state the assumption instead of inventing facts.
-- Generate a quick overview only. Deep detail is generated later per opened section.
-- Keep the output concise. Use short, decision-ready sentences instead of long paragraphs.
-- Keep every string under 35 words unless a field absolutely needs more.
-- Use exactly 3 items for risks, suggestions, assumptions, and each SWOT list.
 - Return ONLY valid JSON. No markdown, no intro text.
 
 Dimensional scoring weights:
@@ -1115,14 +779,14 @@ Return this exact JSON structure:
     "unit_economics": "string",
     "cost_estimation": "string",
     "go_to_market_strategy": "string",
-    "risks": ["2 specific risks"],
-    "suggestions": ["2 actionable suggestions"],
-    "assumptions": ["2 strings"],
+    "risks": ["3 to 6 specific risks"],
+    "suggestions": ["3 to 6 actionable suggestions"],
+    "assumptions": ["string"],
     "swot": {
-      "strengths": ["2 strings"],
-      "weaknesses": ["2 strings"],
-      "opportunities": ["2 strings"],
-      "threats": ["2 strings"]
+      "strengths": ["string"],
+      "weaknesses": ["string"],
+      "opportunities": ["string"],
+      "threats": ["string"]
     },
     "dimensional_scores": {
       "market_opportunity": number,
@@ -1144,7 +808,7 @@ Return this exact JSON structure:
     const completion = await azureOpenai.chat.completions.create({
       model: azureOpenAiDeployment,
       messages: [{ role: "user", content: prompt }],
-      max_completion_tokens: PHASE1_OVERVIEW_MAX_TOKENS,
+      max_completion_tokens: 4096,
     });
 
     const analysis = ensureDefaultRegion(parseAiJson<any>(completion.choices[0]?.message?.content ?? "{}"));
@@ -1188,58 +852,11 @@ router.get("/:id/status", requireAuth, async (req: AuthRequest, res) => {
       phase2Error: session.phase2Error,
       analysis: session.researchText ? ensureDefaultRegion(parseStoredJson<any>(session.researchText)) : null,
       blueprint: parseStoredJson<any>(session.technicalDocText),
-      sections: await getLaunchSectionStatuses(session._id as mongoose.Types.ObjectId),
     });
   } catch (err) {
     req.log.error({ err }, "Failed to fetch launch session status");
     res.status(500).json({ error: "Failed to fetch launch session status" });
   }
-});
-
-async function handleLaunchReportSection(req: AuthRequest, res: Response, force = false) {
-  const phase = String(req.params.phase) as LaunchReportPhase;
-  const sectionKey = String(req.params.sectionKey);
-
-  if (phase !== "analysis" && phase !== "blueprint") {
-    res.status(404).json({ error: "Unknown report phase" });
-    return;
-  }
-
-  if (!requireAiProvider(res)) {
-    return;
-  }
-
-  try {
-    const session = await LaunchSession.findOne({ _id: req.params.id, userId: req.userId });
-    if (!session) {
-      res.status(404).json({ error: "Session not found" });
-      return;
-    }
-
-    const content = await generateLaunchReportSection(session, phase, sectionKey, force);
-    const updatedSession = await LaunchSession.findById(session._id);
-    res.json({
-      phase,
-      sectionKey,
-      content,
-      session: updatedSession,
-      analysis: updatedSession?.researchText ? ensureDefaultRegion(parseStoredJson<any>(updatedSession.researchText)) : null,
-      blueprint: parseStoredJson<any>(updatedSession?.technicalDocText),
-      sections: await getLaunchSectionStatuses(session._id as mongoose.Types.ObjectId),
-    });
-  } catch (err: any) {
-    const statusCode = typeof err?.statusCode === "number" ? err.statusCode : 500;
-    req.log.error({ err, phase, sectionKey }, "Failed to generate launch report section");
-    res.status(statusCode).json({ error: statusCode === 500 ? "Failed to generate report section" : err.message });
-  }
-}
-
-router.get("/:id/sections/:phase/:sectionKey", requireAuth, (req: AuthRequest, res) => {
-  void handleLaunchReportSection(req, res);
-});
-
-router.post("/:id/sections/:phase/:sectionKey/regenerate", requireAuth, (req: AuthRequest, res) => {
-  void handleLaunchReportSection(req, res, true);
 });
 
 router.put("/:id/phase1-confirmation", requireAuth, async (req: AuthRequest, res) => {
@@ -1273,7 +890,6 @@ router.put("/:id/phase1-confirmation", requireAuth, async (req: AuthRequest, res
 
     if (phase1Changed) {
       await LaunchClarification.deleteMany({ sessionId: session._id });
-      await LaunchReportSection.deleteMany({ sessionId: session._id });
       session.technicalDocText = undefined;
       session.businessDocText = undefined;
       session.phase2Status = "queued";
@@ -1294,7 +910,6 @@ router.put("/:id/phase1-confirmation", requireAuth, async (req: AuthRequest, res
       phase1Status: session.phase1Status,
       phase2Status: session.phase2Status ?? "queued",
       blueprint: null,
-      sections: await getLaunchSectionStatuses(session._id as mongoose.Types.ObjectId),
     });
   } catch (err) {
     req.log.error({ err }, "Failed to confirm Phase 1 output");
@@ -1369,7 +984,7 @@ Return ONLY a valid JSON array of strings.`;
       const completion = await azureOpenai.chat.completions.create({
         model: azureOpenAiDeployment,
         messages: [{ role: "user", content: prompt }],
-        max_completion_tokens: OPTIONAL_QUESTIONS_MAX_TOKENS,
+        max_completion_tokens: 1024,
       });
 
       const parsedQuestions = parseAiJson<unknown>(completion.choices[0]?.message?.content ?? "[]");
@@ -1378,7 +993,7 @@ Return ONLY a valid JSON array of strings.`;
         : Array.isArray((parsedQuestions as any)?.questions)
           ? (parsedQuestions as any).questions
           : [];
-      const questionsList = asStringArray(rawQuestions).slice(0, 3);
+      const questionsList = asStringArray(rawQuestions).slice(0, 4);
 
       const optionalQuestions = await Promise.all(
         questionsList.map((question, index) =>
@@ -1434,15 +1049,11 @@ router.post("/:id/blueprint", requireAuth, async (req: AuthRequest, res) => {
     await persistDynamicAnswers(session._id as mongoose.Types.ObjectId, parsed.data.answers);
     const technicalAnswersText = await buildTechnicalAnswersText(session._id as mongoose.Types.ObjectId, parsed.data.answers);
     const businessAnalysis = ensureDefaultRegion(session.researchText ? JSON.parse(session.researchText) : {});
-    const phase2InputChanged = session.technicalAnswersText !== technicalAnswersText;
 
     session.technicalAnswersText = technicalAnswersText;
     session.phase2Status = "generating";
     session.phase2Error = undefined;
     session.status = "generating";
-    if (phase2InputChanged) {
-      await LaunchReportSection.deleteMany({ sessionId: session._id, phase: "blueprint" });
-    }
     await session.save();
 
     res.status(202).json({ session, phase2Status: "generating" });
@@ -1464,10 +1075,9 @@ Mission:
 - Use the validated business idea analysis.
 - Use all mandatory business answers.
 - Use all optional dynamic answers.
-- Convert them into a fast blueprint overview.
+- Convert them into a complete execution blueprint.
 - Act as an experienced founder, CTO, investor, product manager, and architect simultaneously.
 - Help the founder understand exactly what should be built, why it should be built, how it should be built, how much it may cost, and what risks exist.
-- Deep section-level detail is generated later when the user opens a section.
 
 Critical rules:
 - Never generate generic startup advice.
@@ -1479,10 +1089,6 @@ Critical rules:
 - Recommend MVP-first development.
 - Avoid overengineering.
 - Explain business reasoning and technical reasoning separately.
-- Optimize for speed and clarity. Keep every string short, concrete, and useful as an overview.
-- Prefer 1 to 2 bullets per array. Do not produce exhaustive lists in this overview.
-- Use one primary persona and one secondary persona unless the idea truly requires more.
-- Keep roadmap deliverables to 1 per phase and risk lists to 1 per category.
 - Return ONLY valid JSON. No markdown, no intro text.`;
 
     const userPrompt = `Mandatory inputs:
@@ -1496,7 +1102,7 @@ ${session.rawIdea}
 Mandatory and optional Phase 2 answers:
 ${technicalAnswersText}
 
-Return this exact JSON structure. Fill every field with concise, idea-specific overview content:
+Return this exact JSON structure. Fill every field with concrete, idea-specific content:
 {
   "step": "business_and_development_blueprint",
   "executive_summary": {
@@ -1512,7 +1118,7 @@ Return this exact JSON structure. Fill every field with concise, idea-specific o
     "why_existing_solutions_fail": ["string"]
   },
   "target_users": {
-    "primary_users": [{ "persona": "string", "description": "string", "pain_points": ["2 to 3 strings"], "goals": ["2 to 3 strings"] }],
+    "primary_users": [{ "persona": "string", "description": "string", "pain_points": ["string"], "goals": ["string"] }],
     "secondary_users": [{ "persona": "string", "description": "string" }]
   },
   "product_strategy": {
@@ -1525,7 +1131,7 @@ Return this exact JSON structure. Fill every field with concise, idea-specific o
     "must_have_features": [{ "feature": "string", "purpose": "string", "priority": "Critical" }],
     "should_have_features": [{ "feature": "string", "purpose": "string" }],
     "future_features": [{ "feature": "string", "reason": "string" }],
-    "excluded_from_mvp": ["2 to 4 strings"]
+    "excluded_from_mvp": ["string"]
   },
   "user_journey": {
     "onboarding_flow": ["string"],
@@ -1560,7 +1166,7 @@ Return this exact JSON structure. Fill every field with concise, idea-specific o
     "phase_5_launch": { "duration": "string", "deliverables": ["string"] }
   },
   "team_requirements": {
-    "recommended_team": [{ "role": "string", "responsibilities": ["2 to 3 strings"] }],
+    "recommended_team": [{ "role": "string", "responsibilities": ["string"] }],
     "minimum_team": ["string"]
   },
   "cost_estimation": {
@@ -1601,7 +1207,7 @@ Return this exact JSON structure. Fill every field with concise, idea-specific o
         { role: "system", content: blueprintSystemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_completion_tokens: BLUEPRINT_OVERVIEW_MAX_TOKENS,
+      max_completion_tokens: 8192,
     });
 
     const blueprint = parseAiJson<any>(completion.choices[0]?.message?.content ?? "{}");
