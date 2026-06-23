@@ -42,7 +42,7 @@ export default function TalentProfile() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to invite");
       setInviteStatus("success");
-      toast.success(`${user?.name ?? "Talent"} has been invited to the room!`);
+      toast.success(data.message ?? `${user?.name ?? "Talent"} has been invited to the room!`);
       setTimeout(() => { setInviting(false); setInviteStatus("idle"); }, 2000);
     } catch (e: any) {
       const msg = e.message ?? "Failed to invite talent";

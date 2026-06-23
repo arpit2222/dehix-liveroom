@@ -13,11 +13,10 @@ import { LaunchSession } from "../models/LaunchSession.js";
 import { LaunchClarification } from "../models/LaunchClarification.js";
 import { LiveRoom } from "../models/LiveRoom.js";
 import { RoomRole } from "../models/RoomRole.js";
-import { RoomParticipant } from "../models/RoomParticipant.js";
 import { RoomActivity } from "../models/RoomActivity.js";
 import { SbtCredential } from "../models/SbtCredential.js";
 import { ConfirmPhase1OutputBody, CreateLaunchSessionBody, ScopeLaunchSessionBody } from "@workspace/api-zod";
-import { getIo } from "../socket.js";
+import { inviteTalentToRoom } from "../lib/roomInvites.js";
 
 const router = Router();
 
@@ -1482,7 +1481,6 @@ Return this exact JSON structure:
 
     const roleByTitle = new Map(roleDocs.map((role) => [role.roleTitle.toLowerCase(), role]));
     const selectedKeys = new Set<string>();
-    const io = getIo();
     for (const selected of selectedTalentRecommendations) {
       const talentId = selected?.talentId ?? selected?.user?._id;
       const roleTitle = String(selected?.matchedRole?.roleTitle ?? selected?.role?.roleTitle ?? "");
@@ -1492,21 +1490,12 @@ Return this exact JSON structure:
       const key = `${talentId}:${String(role._id)}`;
       if (selectedKeys.has(key)) continue;
       selectedKeys.add(key);
-      const participant = await RoomParticipant.findOneAndUpdate(
-        { roomId: room._id, userId: talentId },
-        { roomId: room._id, userId: talentId, roleId: role._id, status: "invited" },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
-      if (io) {
-        io.to(`talent:${talentId}`).emit("talent:invited", {
-          roomId: room._id,
-          participantId: participant._id,
-          roleId: role._id,
-        });
-        io.to(`room:${room._id}`).emit("room:participant_invited", { roomId: room._id, userId: talentId });
-      }
-      role.status = "invited";
-      await role.save();
+      await inviteTalentToRoom({
+        room,
+        roomId: String(room._id),
+        talentId: String(talentId),
+        roleId: String(role._id),
+      });
     }
 
     if (selectedKeys.size > 0) {

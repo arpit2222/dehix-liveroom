@@ -84,6 +84,23 @@ export default function TalentDashboard() {
 
   useEffect(() => {
     if (!isAuthenticated || user?.role !== "talent") return;
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        refreshTalentInbox();
+      }
+    };
+
+    window.addEventListener("focus", refreshTalentInbox);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refreshTalentInbox);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [isAuthenticated, refreshTalentInbox, user?.role, user?._id]);
+
+  useEffect(() => {
+    if (!isAuthenticated || user?.role !== "talent") return;
     const token = localStorage.getItem("dehix_token");
     if (!token) return;
 
