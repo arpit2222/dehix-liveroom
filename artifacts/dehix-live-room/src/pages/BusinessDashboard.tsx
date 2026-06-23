@@ -85,17 +85,21 @@ export default function BusinessDashboard() {
     event.stopPropagation();
     if (deletingRoomId) return;
     const confirmation = window.prompt(`This permanently deletes "${room.title}" and all room data. Type DELETE to continue.`);
-    if (confirmation !== "DELETE") return;
+    if (confirmation?.trim().toUpperCase() !== "DELETE") return;
 
     setDeletingRoomId(room._id);
     try {
       const token = localStorage.getItem("dehix_token");
+      if (!token) throw new Error("Please sign in again");
       const res = await fetch(`/api/rooms/${room._id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to delete room");
+      if (!res.ok) throw new Error(data.error ? `${data.error} (${res.status})` : `Failed to delete room (${res.status})`);
+      queryClient.setQueryData(getGetMyRoomsQueryKey(), (current: any) =>
+        Array.isArray(current) ? current.filter((item: any) => item._id !== room._id) : current
+      );
       await queryClient.invalidateQueries({ queryKey: getGetMyRoomsQueryKey() });
       toast.success("Room deleted");
     } catch (error: any) {

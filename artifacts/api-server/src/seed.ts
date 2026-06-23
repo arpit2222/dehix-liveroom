@@ -629,7 +629,6 @@ async function seed() {
       suggestedTotalBudgetUsd: 85000,
     },
     status: "open",
-    meetLink: "https://meet.google.com/new",
   });
 
   await RoomRole.insertMany([

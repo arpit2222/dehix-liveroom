@@ -63,8 +63,18 @@ import {
 
 const router = Router();
 
-function generateMeetLink(roomCode: string): string {
-  return `https://meet.google.com/new`;
+function normalizeGoogleMeetLink(value: unknown): string | null {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.hostname !== "meet.google.com") return null;
+    const path = url.pathname.replace(/\/+$/, "");
+    if (!path || path === "/new") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 function originalIdeaFromRoom(room: InstanceType<typeof LiveRoom>): string | undefined {
@@ -119,7 +129,7 @@ function commandHelpSummary() {
     "Available commands:",
     "/interview @name - create or open an interview channel",
     "/interview @name @name2 - create or open a multi-talent interview channel",
-    "/meet - create an instant Meet link inside an interview channel",
+    "/meet - open the saved Meet link, or use /meet <meet.google.com link> to save one",
     "/hire @name - mark a talent as hired after confirmation",
     "/remove @name - remove a talent after confirmation",
     "/help - show this command list",
@@ -413,14 +423,12 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   const { title, rawDescription } = parsed.data;
   try {
     const roomCode = nanoid(8).toUpperCase();
-    const meetLink = generateMeetLink(roomCode);
     const room = await LiveRoom.create({
       roomCode,
       businessId: req.userId,
       title,
       rawDescription,
       status: "scoping",
-      meetLink,
     });
     RoomActivity.create({ roomId: room._id, type: "room_created", actorId: req.userId, meta: { title } }).catch(() => { });
     res.status(201).json(formatRoom(room));
@@ -827,14 +835,19 @@ router.post("/:id/commands/preview", requireAuth, requireRoomAccess, async (req:
         res.status(400).json({ error: "/meet can only be used inside an interview channel" });
         return;
       }
+      const meetLink = normalizeGoogleMeetLink(parsed.args);
+      if (parsed.args && !meetLink) {
+        res.status(400).json({ error: "Paste a valid Google Meet link, not https://meet.google.com/new" });
+        return;
+      }
       res.json({
         commandId: nanoid(10),
         action: "meet",
-        summary: "Create an instant Google Meet link for this interview channel.",
+        summary: meetLink ? "Save this Google Meet link for the interview channel." : "Share the saved Google Meet link for this interview channel.",
         targets: [],
         warnings: [],
         requiresConfirmation: true,
-        payload: { channelId: String(channel._id) },
+        payload: { channelId: String(channel._id), meetLink },
       });
       return;
     }
@@ -918,13 +931,24 @@ router.post("/:id/commands/execute", requireAuth, requireRoomAccess, async (req:
         res.status(403).json({ error: "You do not have access to this interview channel" });
         return;
       }
-      const meetLink = generateMeetLink(room.roomCode);
+      const existingMeetLink = typeof channel.interviewMeetLink === "string" ? channel.interviewMeetLink : "";
+      if (!existingMeetLink && !isRoomOwner(room, req.userId)) {
+        res.status(403).json({ error: "Only the business owner can create the interview Meet link" });
+        return;
+      }
+      const meetLink = existingMeetLink || normalizeGoogleMeetLink((payload as any).meetLink);
+      if (!meetLink) {
+        res.status(400).json({ error: "Create a Google Meet and paste its meet.google.com link first." });
+        return;
+      }
       channel.interviewMeetLink = meetLink;
       channel.interviewStatus = "live";
       await channel.save();
-      const message = await postSystemMessage(room, `Instant Meet created: ${meetLink}`, channel._id);
+      const message = existingMeetLink ? null : await postSystemMessage(room, `Instant Meet created: ${meetLink}`, channel._id);
       getIo()?.to(`room:${room._id}`).emit("room:interview_updated", { roomId: room._id, channel: formatRoomChannel(channel) });
-      await notifyInterviewParticipants(room, channel, "Interview Meet ready", `${room.title}: an instant Meet is ready.`, "talent:interview_meet");
+      if (!existingMeetLink) {
+        await notifyInterviewParticipants(room, channel, "Interview Meet ready", `${room.title}: an instant Meet is ready.`, "talent:interview_meet");
+      }
       res.json({ action, channel: formatRoomChannel(channel), message: message ? formatRoomMessage(message) : null });
       return;
     }
@@ -1069,13 +1093,24 @@ router.post("/:id/interviews/:channelId/meet", requireAuth, requireRoomAccess, a
       res.status(403).json({ error: "You do not have access to this interview channel" });
       return;
     }
-    const meetLink = generateMeetLink(room.roomCode);
+    const existingMeetLink = typeof channel.interviewMeetLink === "string" ? channel.interviewMeetLink : "";
+    if (!existingMeetLink && !isRoomOwner(room, req.userId)) {
+      res.status(403).json({ error: "Only the business owner can create the interview Meet link" });
+      return;
+    }
+    const meetLink = existingMeetLink || normalizeGoogleMeetLink(req.body?.meetLink);
+    if (!meetLink) {
+      res.status(400).json({ error: "Create a Google Meet and paste its meet.google.com link first." });
+      return;
+    }
     channel.interviewMeetLink = meetLink;
     channel.interviewStatus = "live";
     await channel.save();
-    const message = await postSystemMessage(room, `Instant Meet created: ${meetLink}`, channel._id);
+    const message = existingMeetLink ? null : await postSystemMessage(room, `Instant Meet created: ${meetLink}`, channel._id);
     getIo()?.to(`room:${room._id}`).emit("room:interview_updated", { roomId: room._id, channel: formatRoomChannel(channel) });
-    await notifyInterviewParticipants(room, channel, "Interview Meet ready", `${room.title}: an instant Meet is ready.`, "talent:interview_meet");
+    if (!existingMeetLink) {
+      await notifyInterviewParticipants(room, channel, "Interview Meet ready", `${room.title}: an instant Meet is ready.`, "talent:interview_meet");
+    }
     res.json({ channel: formatRoomChannel(channel), message: message ? formatRoomMessage(message) : null });
   } catch (err) {
     req.log.error({ err }, "createInterviewMeet error");
@@ -1567,30 +1602,40 @@ router.delete("/:id", requireAuth, requireRoomOwner, async (req: AuthRequest, re
       return;
     }
 
-    const io = getIo();
-    io?.to(`room:${roomId}`).emit("room:deleted", { roomId });
+    const deleted = await LiveRoom.deleteOne({ _id: room._id, businessId: req.userId });
+    if (deleted.deletedCount === 0) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
 
-    await Promise.all([
-      RoomRole.deleteMany({ roomId: room._id }),
-      RoomParticipant.deleteMany({ roomId: room._id }),
-      RoomChannel.deleteMany({ roomId: room._id }),
-      RoomMessage.deleteMany({ roomId: room._id }),
-      RoomDocumentPermission.deleteMany({ roomId: room._id }),
-      Ticket.deleteMany({ roomId: room._id }),
-      Milestone.deleteMany({ roomId: room._id }),
-      Nda.deleteMany({ roomId: room._id }),
-      FreelancerMatch.deleteMany({ roomId: room._id }),
-      ProjectShortlist.deleteMany({ roomId: room._id }),
-      ProjectEnquiry.deleteMany({ roomId: room._id }),
-      ProjectEnquiryRecipient.deleteMany({ roomId: room._id }),
-      Notification.deleteMany({ roomId: room._id }),
-      GeneratedDoc.deleteMany({ roomId: room._id }),
-      AiChatMessage.deleteMany({ roomId: room._id }),
-      RoomActivity.deleteMany({ roomId: room._id }),
-    ]);
-    await LiveRoom.deleteOne({ _id: room._id });
+    const cleanupTasks = [
+      ["roles", RoomRole.deleteMany({ roomId: room._id })],
+      ["participants", RoomParticipant.deleteMany({ roomId: room._id })],
+      ["channels", RoomChannel.deleteMany({ roomId: room._id })],
+      ["messages", RoomMessage.deleteMany({ roomId: room._id })],
+      ["documentPermissions", RoomDocumentPermission.deleteMany({ roomId: room._id })],
+      ["tickets", Ticket.deleteMany({ roomId: room._id })],
+      ["milestones", Milestone.deleteMany({ roomId: room._id })],
+      ["nda", Nda.deleteMany({ roomId: room._id })],
+      ["freelancerMatches", FreelancerMatch.deleteMany({ roomId: room._id })],
+      ["shortlists", ProjectShortlist.deleteMany({ roomId: room._id })],
+      ["enquiries", ProjectEnquiry.deleteMany({ roomId: room._id })],
+      ["enquiryRecipients", ProjectEnquiryRecipient.deleteMany({ roomId: room._id })],
+      ["notifications", Notification.deleteMany({ roomId: room._id })],
+      ["generatedDocs", GeneratedDoc.deleteMany({ roomId: room._id })],
+      ["aiChatMessages", AiChatMessage.deleteMany({ roomId: room._id })],
+      ["activity", RoomActivity.deleteMany({ roomId: room._id })],
+    ] as const;
+    const cleanupResults = await Promise.allSettled(cleanupTasks.map(([, task]) => task));
+    const cleanupFailures = cleanupResults
+      .map((result, index) => ({ result, label: cleanupTasks[index]?.[0] }))
+      .filter((entry) => entry.result.status === "rejected");
+    if (cleanupFailures.length > 0) {
+      req.log.warn({ roomId, cleanupFailures }, "room deleted with cleanup failures");
+    }
 
-    res.json({ message: "Room deleted" });
+    getIo()?.to(`room:${roomId}`).emit("room:deleted", { roomId });
+    res.json({ message: "Room deleted", cleanupFailedCount: cleanupFailures.length });
   } catch (err) {
     req.log.error({ err }, "deleteRoom error");
     res.status(500).json({ error: "Failed to delete room" });
@@ -2269,7 +2314,11 @@ router.put("/:id/notes", requireAuth, requireRoomAccess, async (req: AuthRequest
 });
 
 router.put("/:id/meet-link", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
-  const { meetLink } = req.body;
+  const meetLink = req.body?.meetLink ? normalizeGoogleMeetLink(req.body.meetLink) : null;
+  if (req.body?.meetLink && !meetLink) {
+    res.status(400).json({ error: "Paste a valid Google Meet link, not https://meet.google.com/new" });
+    return;
+  }
   try {
     const room = await LiveRoom.findByIdAndUpdate(
       req.params["id"],

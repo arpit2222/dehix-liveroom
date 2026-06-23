@@ -211,7 +211,7 @@ export default function LiveRoomPage() {
   );
   const commandSuggestions = [
     { command: "/interview @", label: "Create interview channel" },
-    { command: "/meet", label: "Create instant Meet" },
+    { command: "/meet", label: "Share or open interview Meet" },
     { command: "/hire @", label: "Mark talent hired" },
     { command: "/remove @", label: "Remove talent" },
     { command: "/help", label: "Show commands" },
@@ -363,6 +363,11 @@ export default function LiveRoomPage() {
       setPendingCommand(null);
       return;
     }
+    if (pendingCommand.action === "meet" && !pendingCommand.payload?.meetLink) {
+      setPendingCommand(null);
+      await createMeet();
+      return;
+    }
     setCommandLoading(true);
     try {
       const res = await fetch(`/api/rooms/${roomId}/commands/execute`, {
@@ -404,21 +409,39 @@ export default function LiveRoomPage() {
     setMessageInput(next);
   };
 
-  const createMeet = async () => {
+  const createMeet = async (providedMeetLink?: string) => {
     if (!selectedChannel || selectedChannel.type !== "interview" || commandLoading) return;
+    if (selectedChannel.interviewMeetLink) {
+      window.open(selectedChannel.interviewMeetLink, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (!isOwner && !providedMeetLink) {
+      toast.error("Meet link is not ready yet");
+      return;
+    }
+    let meetLink = providedMeetLink?.trim() ?? "";
+    if (!meetLink) {
+      window.open("https://meet.google.com/new", "_blank", "noopener,noreferrer");
+      meetLink = window.prompt("Google Meet opened in a new tab. Paste the generated meet.google.com link here to share it with the talent.")?.trim() ?? "";
+    }
+    if (!meetLink) {
+      toast.info("Meet was not shared because no Google Meet link was pasted");
+      return;
+    }
     setCommandLoading(true);
     try {
       const res = await fetch(`/api/rooms/${roomId}/interviews/${selectedChannel._id}/meet`, {
         method: "POST",
-        headers: { ...authHeaders() },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ meetLink }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to create Meet");
+      if (!res.ok) throw new Error(data.error ?? "Failed to save Meet link");
       if (data.message) mergeMessage(data.message);
       await loadWorkspace(selectedChannel._id);
-      toast.success("Instant Meet created");
+      toast.success("Meet link shared");
     } catch (err: any) {
-      toast.error(err.message ?? "Failed to create Meet");
+      toast.error(err.message ?? "Failed to save Meet link");
     } finally {
       setCommandLoading(false);
     }
@@ -853,9 +876,16 @@ export default function LiveRoomPage() {
                     <Video className="h-3.5 w-3.5" /> Join Meet
                   </a>
                 )}
-                <Button size="sm" variant="outline" onClick={() => void createMeet()} disabled={commandLoading} className="h-8 text-xs">
-                  <Video className="h-3.5 w-3.5 mr-1" /> Instant Meet
-                </Button>
+                {isOwner && !selectedChannel.interviewMeetLink && (
+                  <Button size="sm" variant="outline" onClick={() => void createMeet()} disabled={commandLoading} className="h-8 text-xs">
+                    <Video className="h-3.5 w-3.5 mr-1" /> Create Meet
+                  </Button>
+                )}
+                {!isOwner && !selectedChannel.interviewMeetLink && (
+                  <span className="hidden sm:inline-flex h-8 items-center rounded-md border border-border/40 px-2.5 text-[10px] font-semibold text-muted-foreground">
+                    Meet not ready
+                  </span>
+                )}
                 {isOwner && (
                   <>
                     <Button size="sm" variant="outline" onClick={() => setShowInterviewNotes((value) => !value)} className="h-8 text-xs">
