@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Search, Layers, Users, FileCheck, Archive, Coins, Clipboard, Ticket, Calendar, Play, CheckCircle2, ClipboardCopy, ArrowUpRight } from "lucide-react";
+import { Search, Layers, Users, FileCheck, Archive, Coins, Clipboard, Ticket, Calendar, Play, CheckCircle2, ClipboardCopy, ArrowUpRight, Trash2 } from "lucide-react";
 
 const STATUS_COLORS: Record<string, string> = {
   scoping: "text-blue-500 bg-blue-500/10 border-blue-500/25 dark:text-blue-400 dark:bg-blue-500/10 dark:border-blue-500/20",
@@ -28,6 +28,7 @@ export default function BusinessDashboard() {
   const [profileName, setProfileName] = useState("");
   const [profileWallet, setProfileWallet] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
+  const [deletingRoomId, setDeletingRoomId] = useState<string | null>(null);
 
   if (!isAuthenticated) {
     return (
@@ -77,6 +78,30 @@ export default function BusinessDashboard() {
       toast.error(e.message ?? "Failed to update profile");
     } finally {
       setSavingProfile(false);
+    }
+  };
+
+  const deleteRoom = async (event: React.MouseEvent, room: any) => {
+    event.stopPropagation();
+    if (deletingRoomId) return;
+    const confirmation = window.prompt(`This permanently deletes "${room.title}" and all room data. Type DELETE to continue.`);
+    if (confirmation !== "DELETE") return;
+
+    setDeletingRoomId(room._id);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const res = await fetch(`/api/rooms/${room._id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to delete room");
+      await queryClient.invalidateQueries({ queryKey: getGetMyRoomsQueryKey() });
+      toast.success("Room deleted");
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to delete room");
+    } finally {
+      setDeletingRoomId(null);
     }
   };
 
@@ -342,6 +367,14 @@ export default function BusinessDashboard() {
                           <Play className="h-3 w-3 fill-current" /> Contract
                         </button>
                       )}
+                      <button
+                        onClick={(e) => void deleteRoom(e, room)}
+                        disabled={deletingRoomId === room._id}
+                        className="text-[11px] text-red-500 dark:text-red-400 border border-red-500/25 hover:border-red-500/40 bg-red-500/5 hover:bg-red-500/10 rounded px-2.5 py-1 font-bold transition-all shadow-sm flex items-center gap-1 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        {deletingRoomId === room._id ? "Deleting" : "Delete"}
+                      </button>
                     </div>
                   </div>
                 </div>
