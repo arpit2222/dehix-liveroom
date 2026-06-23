@@ -43,6 +43,7 @@ import { azureOpenai, azureOpenAiDeployment, isAiProviderEnabled } from "../lib/
 import { TECH_MANDATORY_QUESTIONS } from "../lib/launchQuestions.js";
 import { requireRoomAccess, requireRoomOwner } from "../lib/roomAccess.js";
 import { calculateRoomFreelancerMatches } from "../lib/freelancerLinking.js";
+import { RoomInviteError, inviteTalentToRoom } from "../lib/roomInvites.js";
 import {
   STANDARD_ROOM_DOCUMENTS,
   createTalentJoinedSystemMessage,
@@ -884,41 +885,16 @@ router.post("/:id/invite", requireAuth, requireRoomOwner, async (req: AuthReques
   const { talentId, roleId } = parsed.data;
   try {
     const roomId = String(req.params["id"]);
-    const role = await RoomRole.findOne({ _id: roleId, roomId });
-    if (!role) {
-      res.status(400).json({ error: "Role does not belong to this room" });
-      return;
-    }
-    const existing = await RoomParticipant.findOne({ roomId, userId: talentId });
-    if (existing) {
-      const io = getIo();
-      if (io && existing.status === "invited") {
-        io.to(`talent:${talentId}`).emit("talent:invited", {
-          roomId,
-          participantId: existing._id,
-          roleId: existing.roleId ?? roleId,
-        });
-      }
-      res.json({ message: "Already invited" });
-      return;
-    }
-    const participant = await RoomParticipant.create({
-      roomId,
-      userId: talentId,
-      roleId,
-      status: "invited",
+    const result = await inviteTalentToRoom({ roomId, talentId, roleId });
+    res.status(result.created ? 201 : 200).json({
+      message: getInviteResultMessage(result),
+      participant: formatParticipant(result.participant),
     });
-    await RoomRole.findOneAndUpdate({ _id: roleId, roomId }, { status: "invited" });
-    const io = getIo();
-    if (io) {
-      io.to(`talent:${talentId}`).emit("talent:invited", {
-        roomId,
-        participantId: participant._id,
-        roleId,
-      });
-    }
-    res.json({ message: "Talent invited" });
   } catch (err) {
+    if (err instanceof RoomInviteError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
     req.log.error({ err }, "inviteTalent error");
     res.status(500).json({ error: "Failed to invite talent" });
   }
@@ -1703,41 +1679,28 @@ router.post("/:id/participants", requireAuth, requireRoomOwner, async (req: Auth
   if (!userId) { res.status(400).json({ error: "userId required" }); return; }
   try {
     const roomId = String(req.params["id"]);
-    const room = await LiveRoom.findById(roomId);
-    if (!room) { res.status(404).json({ error: "Room not found" }); return; }
-    if (roleId) {
-      const role = await RoomRole.findOne({ _id: roleId, roomId });
-      if (!role) {
-        res.status(400).json({ error: "Role does not belong to this room" });
-        return;
-      }
-    }
-    const existing = await RoomParticipant.findOne({ roomId, userId });
-    if (existing) {
-      res.status(409).json({ error: "Talent is already in this room" });
+    const result = await inviteTalentToRoom({ roomId, talentId: String(userId), roleId: typeof roleId === "string" ? roleId : undefined });
+    res.status(result.created ? 201 : 200).json({
+      ...formatParticipant(result.participant),
+      message: getInviteResultMessage(result),
+    });
+  } catch (err) {
+    if (err instanceof RoomInviteError) {
+      res.status(err.statusCode).json({ error: err.message });
       return;
     }
-    const participant = await RoomParticipant.create({
-      roomId,
-      userId,
-      roleId: roleId ?? undefined,
-      status: "invited",
-    });
-    const io = getIo();
-    if (io) {
-      io.to(`room:${roomId}`).emit("room:participant_invited", { roomId, userId });
-      io.to(`talent:${userId}`).emit("talent:invited", {
-        roomId,
-        participantId: participant._id,
-        roleId: participant.roleId ?? null,
-      });
-    }
-    res.status(201).json(formatParticipant(participant));
-  } catch (err) {
     req.log.error({ err }, "inviteParticipant error");
     res.status(500).json({ error: "Failed to invite talent" });
   }
 });
+
+function getInviteResultMessage(result: Awaited<ReturnType<typeof inviteTalentToRoom>>): string {
+  if (result.alreadyMember) return "Talent is already in this room";
+  if (result.reactivated) return "Talent re-invited";
+  if (result.roleChanged) return "Invitation updated";
+  if (!result.created) return "Invitation resent";
+  return "Talent invited";
+}
 
 function clampTopK(value: unknown): number {
   const parsed = Number(value ?? 5);

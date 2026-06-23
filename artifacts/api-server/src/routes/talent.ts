@@ -137,7 +137,7 @@ router.get("/invites", requireAuth, async (req: AuthRequest, res) => {
     const participants = await RoomParticipant.find({
       userId: req.userId,
       status: "invited",
-    });
+    }).sort({ _id: -1 });
     const results = await Promise.all(
       participants.map(async (p) => {
         const room = await LiveRoom.findById(p.roomId);
@@ -175,7 +175,7 @@ router.get("/invites", requireAuth, async (req: AuthRequest, res) => {
         };
       })
     );
-    res.json(results);
+    res.json(results.filter((result) => result.room !== null));
   } catch (err) {
     res.status(500).json({ error: "Failed to get invites" });
   }

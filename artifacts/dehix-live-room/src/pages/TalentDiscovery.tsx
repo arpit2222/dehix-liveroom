@@ -66,7 +66,7 @@ export default function TalentDiscovery() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to invite");
-      toast.success("Talent invited to room!");
+      toast.success(data.message ?? "Talent invited to room!");
       setInvitingId(null);
     } catch (e: any) {
       toast.error(e.message ?? "Failed to invite talent");
