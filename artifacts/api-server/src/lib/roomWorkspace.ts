@@ -15,6 +15,7 @@ type ChannelDoc = InstanceType<typeof RoomChannel>;
 type MessageDoc = InstanceType<typeof RoomMessage>;
 
 export const ROOM_MEMBER_STATUSES = ["joined", "accepted"] as const;
+export const ROOM_INTERVIEW_ELIGIBLE_STATUSES = ["invited", "joined", "accepted"] as const;
 
 export const STANDARD_ROOM_DOCUMENTS = [
   { docType: "business_validation", title: "Business Validation", source: "standard" },
@@ -68,6 +69,42 @@ export async function ensureDirectChannelForParticipant(room: RoomDoc, participa
     roomId: room._id,
     type: "direct",
     name,
+    ...updates,
+  });
+}
+
+export async function ensureInterviewChannelForParticipants({
+  room,
+  participants,
+  title,
+  roleId,
+}: {
+  room: RoomDoc;
+  participants: ParticipantDoc[];
+  title?: string;
+  roleId?: string | Types.ObjectId | null;
+}): Promise<ChannelDoc | null> {
+  const activeParticipants = participants.filter((participant) => ROOM_INTERVIEW_ELIGIBLE_STATUSES.includes(participant.status as any));
+  if (activeParticipants.length === 0) return null;
+  const talentIds = [...new Set(activeParticipants.map(participantUserId))].sort();
+  const channelParticipants = [String(room.businessId), ...talentIds];
+  const name = `interview:${talentIds.join(":")}`;
+  const updates = {
+    participantIds: channelParticipants,
+    roleId: roleId ?? activeParticipants[0]?.roleId ?? undefined,
+  };
+  const existing = await RoomChannel.findOne({ roomId: room._id, type: "interview", name });
+  if (existing) {
+    existing.set(updates);
+    if (!existing.interviewStatus) existing.interviewStatus = "scheduled";
+    if (title?.trim()) existing.name = name;
+    return existing.save();
+  }
+  return RoomChannel.create({
+    roomId: room._id,
+    type: "interview",
+    name,
+    interviewStatus: "scheduled",
     ...updates,
   });
 }
@@ -217,6 +254,10 @@ export function formatRoomChannel(channel: ChannelDoc, displayName?: string) {
     displayName: displayName ?? (channel.type === "general" ? "general" : "Direct message"),
     participantIds: channel.participantIds,
     roleId: channel.roleId ?? null,
+    interviewStatus: channel.interviewStatus ?? null,
+    interviewMeetLink: channel.interviewMeetLink ?? null,
+    interviewScheduledAt: channel.interviewScheduledAt ?? null,
+    interviewNotes: channel.interviewNotes ?? null,
     createdAt: channel.createdAt,
   };
 }
