@@ -30,8 +30,12 @@ export async function inviteTalentToRoom(input: InviteTalentToRoomInput) {
   const talent = await User.findOne({
     _id: input.talentId,
     role: "talent",
-    accountStatus: "active",
-  }).select("name email");
+    $or: [
+      { accountStatus: "active" },
+      { accountStatus: { $exists: false } },
+      { accountStatus: null },
+    ],
+  }).select("name email accountStatus");
   if (!talent) {
     throw new RoomInviteError(404, "Talent not found");
   }
