@@ -209,13 +209,16 @@ export default function LiveRoomPage() {
     () => (workspace?.participants ?? []).filter((participant: any) => String(participant.userId?._id ?? participant.talentId ?? participant.userId) !== String(room?.businessId)),
     [workspace, room?.businessId]
   );
-  const commandSuggestions = [
-    { command: "/interview @", label: "Create interview channel" },
-    { command: "/meet", label: "Share or open interview Meet" },
-    { command: "/hire @", label: "Mark talent hired" },
-    { command: "/remove @", label: "Remove talent" },
-    { command: "/help", label: "Show commands" },
-  ];
+  const commandSuggestions = useMemo(() => {
+    if (!isOwner) return [{ command: "/help", label: "Show commands" }];
+    return [
+      { command: "/interview @", label: "Create interview channel" },
+      ...(selectedChannel?.type === "interview" ? [{ command: "/meet", label: "Share interview Meet" }] : []),
+      { command: "/hire @", label: "Mark talent hired" },
+      { command: "/remove @", label: "Remove talent" },
+      { command: "/help", label: "Show commands" },
+    ];
+  }, [isOwner, selectedChannel?.type]);
   const mentionFragment = (() => {
     const match = messageInput.match(/@([^@\n]*)$/);
     return match ? match[1]!.trim().toLowerCase() : "";
@@ -858,7 +861,7 @@ export default function LiveRoomPage() {
             </div>
             {selectedChannel?.type === "interview" ? (
               <div className="flex items-center gap-2">
-                {selectedChannelParticipants.slice(0, 3).map((participant: any) => {
+                {isOwner && selectedChannelParticipants.slice(0, 3).map((participant: any) => {
                   const person = participant.user ?? participant.userId;
                   return (
                     <span key={participant._id} className="hidden lg:inline-flex rounded-full border border-border/40 px-2 py-1 text-[10px] font-semibold text-muted-foreground">
@@ -880,11 +883,6 @@ export default function LiveRoomPage() {
                   <Button size="sm" variant="outline" onClick={() => void createMeet()} disabled={commandLoading} className="h-8 text-xs">
                     <Video className="h-3.5 w-3.5 mr-1" /> Create Meet
                   </Button>
-                )}
-                {!isOwner && !selectedChannel.interviewMeetLink && (
-                  <span className="hidden sm:inline-flex h-8 items-center rounded-md border border-border/40 px-2.5 text-[10px] font-semibold text-muted-foreground">
-                    Meet not ready
-                  </span>
                 )}
                 {isOwner && (
                   <>
@@ -1019,12 +1017,16 @@ export default function LiveRoomPage() {
                   }
                 }}
                 rows={2}
-                placeholder={`Message ${selectedChannel?.displayName ?? "channel"}... /help for commands`}
+                placeholder={isOwner
+                  ? `Message ${selectedChannel?.displayName ?? "channel"}... /help for commands`
+                  : `Message ${selectedChannel?.displayName ?? "channel"}...`}
                 className="w-full resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground/45"
               />
               <div className="flex items-center justify-between gap-3 px-1">
                 <div className="text-[10px] text-muted-foreground">
-                  Use @dehixai for AI, @name to notify talent, or / commands for room actions.
+                  {isOwner
+                    ? "Use @dehixai for AI, @name to notify talent, or / commands for room actions."
+                    : "Use @dehixai for AI or @name mentions in conversations."}
                 </div>
                 <Button size="sm" onClick={() => void sendMessage()} disabled={!messageInput.trim() || sending} className="h-8 text-xs font-bold">
                   {sending ? (
