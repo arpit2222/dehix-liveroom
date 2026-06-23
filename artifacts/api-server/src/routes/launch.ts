@@ -465,6 +465,68 @@ function inferSkillDomain(text: string): string {
   return "Full Stack Product Development";
 }
 
+function selectedTalentRoleText(selected: any): string {
+  const role = selected?.matchedRole ?? selected?.role ?? {};
+  return [
+    role?.roleTitle,
+    role?.role,
+    role?.skillDomain,
+    textFromUnknown(role?.responsibilities),
+    selected?.credential?.skillDomain,
+  ].map((value) => String(value ?? "").trim()).filter(Boolean).join(" ");
+}
+
+function scoreSelectedRoleAgainstRoomRole(roomRole: any, selected: any): number {
+  const selectedRole = selected?.matchedRole ?? selected?.role ?? {};
+  const selectedTitle = normalizeText(String(selectedRole?.roleTitle ?? selectedRole?.role ?? ""));
+  const selectedSkill = normalizeText(String(selectedRole?.skillDomain ?? selected?.credential?.skillDomain ?? ""));
+  const roomTitle = normalizeText(String(roomRole.roleTitle ?? ""));
+  const roomSkill = normalizeText(String(roomRole.skillDomain ?? ""));
+
+  if (selectedTitle && roomTitle && selectedTitle === roomTitle) return 100;
+  if (selectedSkill && roomSkill && selectedSkill === roomSkill) return 92;
+  if (selectedSkill && roomSkill && (containsSkillTerm(roomSkill, selectedSkill) || containsSkillTerm(selectedSkill, roomSkill))) return 84;
+  if (selectedTitle && roomTitle && (containsSkillTerm(roomTitle, selectedTitle) || containsSkillTerm(selectedTitle, roomTitle))) return 78;
+
+  const selectedTokens = new Set(textTokens(`${selectedTitle} ${selectedSkill}`));
+  const roomTokens = new Set(textTokens(`${roomTitle} ${roomSkill}`));
+  if (selectedTokens.size === 0 || roomTokens.size === 0) return 0;
+  const overlap = [...selectedTokens].filter((token) => roomTokens.has(token)).length;
+  return Math.round((overlap / Math.max(selectedTokens.size, roomTokens.size)) * 70);
+}
+
+async function resolveRoomRoleForSelectedTalent(
+  roomId: any,
+  roleDocs: any[],
+  selected: any
+) {
+  let bestRole: any = null;
+  let bestScore = 0;
+  for (const role of roleDocs) {
+    const score = scoreSelectedRoleAgainstRoomRole(role, selected);
+    if (score > bestScore) {
+      bestRole = role;
+      bestScore = score;
+    }
+  }
+  if (bestRole && bestScore >= 45) return bestRole;
+
+  const selectedRole = selected?.matchedRole ?? selected?.role ?? {};
+  const roleText = selectedTalentRoleText(selected);
+  const roleTitle = firstNonEmpty(selectedRole?.roleTitle, selectedRole?.role, roleText) ?? "Project Role";
+  const skillDomain = firstNonEmpty(selectedRole?.skillDomain, selected?.credential?.skillDomain, inferSkillDomain(roleText)) ?? "Full Stack Product Development";
+  const createdRole = await RoomRole.create({
+    roomId,
+    roleTitle,
+    skillDomain,
+    requiredLevel: selectedRole?.requiredLevel === 2 ? 2 : 1,
+    minReputation: Number(selectedRole?.minReputation ?? 500),
+    status: "open",
+  });
+  roleDocs.push(createdRole);
+  return createdRole;
+}
+
 function parseMoneyValue(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "object" && value !== null) {
@@ -1479,13 +1541,11 @@ Return this exact JSON structure:
         )
       : [];
 
-    const roleByTitle = new Map(roleDocs.map((role) => [role.roleTitle.toLowerCase(), role]));
     const selectedKeys = new Set<string>();
     for (const selected of selectedTalentRecommendations) {
       const talentId = selected?.talentId ?? selected?.user?._id;
-      const roleTitle = String(selected?.matchedRole?.roleTitle ?? selected?.role?.roleTitle ?? "");
-      if (!talentId || !roleTitle) continue;
-      const role = roleByTitle.get(roleTitle.toLowerCase());
+      if (!talentId) continue;
+      const role = await resolveRoomRoleForSelectedTalent(room._id, roleDocs, selected);
       if (!role) continue;
       const key = `${talentId}:${String(role._id)}`;
       if (selectedKeys.has(key)) continue;
