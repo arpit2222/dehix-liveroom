@@ -2146,13 +2146,14 @@ Please return ONLY the modified text itself, without any introductory or convers
         throw new Error(await readApiError(res, "Failed to generate talent recommendations"));
       }
       const data = await res.json();
-      setTalentRecommendationReport({
+      const report: TalentRecommendationReport = {
         budgetUsd: data.budgetUsd ?? null,
         roleCount: data.roleCount ?? 0,
         recommendedTeams: Array.isArray(data.recommendedTeams) ? data.recommendedTeams : undefined,
         recommendations: Array.isArray(data.recommendations) ? data.recommendations : [],
-      });
-      setSelectedTalentKeys({});
+      };
+      setTalentRecommendationReport(report);
+      setSelectedTalentKeys(buildDefaultSelectedTalentKeys(report));
       setPhase("recommendations");
     } catch (err: any) {
       const msg = err?.message ?? "Failed to generate talent recommendations";
@@ -2165,6 +2166,42 @@ Please return ONLY the modified text itself, without any introductory or convers
 
   const recommendationKey = (recommendation: TalentRecommendation) =>
     `${recommendation.talentId}:${recommendation.matchedRole.roleTitle}`;
+
+  const buildDefaultSelectedTalentKeys = (report: TalentRecommendationReport) => {
+    const defaults: Record<string, boolean> = {};
+    const groups = Array.isArray(report.recommendedTeams) && report.recommendedTeams.length > 0
+      ? report.recommendedTeams
+      : Object.values(
+          report.recommendations.reduce<Record<string, RoleRecommendationGroup>>((acc, recommendation) => {
+            const key = recommendation.matchedRole.roleTitle;
+            if (!acc[key]) {
+              acc[key] = {
+                role: recommendation.matchedRole,
+                availableMatches: [],
+                unavailableMatches: [],
+                topMatches: [],
+              };
+            }
+            acc[key].topMatches.push(recommendation);
+            if ((recommendation.user.availabilityRank ?? (recommendation.user.isOnline ? 4 : 0)) >= 2) {
+              acc[key].availableMatches.push(recommendation);
+            } else {
+              acc[key].unavailableMatches.push(recommendation);
+            }
+            return acc;
+          }, {})
+        );
+
+    const alreadyPickedTalentIds = new Set<string>();
+    for (const group of groups) {
+      const ordered = [...(group.availableMatches ?? []), ...(group.topMatches ?? []), ...(group.unavailableMatches ?? [])];
+      const selected = ordered.find((recommendation) => !alreadyPickedTalentIds.has(String(recommendation.talentId))) ?? ordered[0];
+      if (!selected) continue;
+      alreadyPickedTalentIds.add(String(selected.talentId));
+      defaults[recommendationKey(selected)] = true;
+    }
+    return defaults;
+  };
 
   const groupedRecommendationTeams: RoleRecommendationGroup[] = talentRecommendationReport?.recommendedTeams?.length
     ? talentRecommendationReport.recommendedTeams
