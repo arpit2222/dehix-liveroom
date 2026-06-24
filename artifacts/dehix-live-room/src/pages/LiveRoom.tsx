@@ -501,39 +501,38 @@ export default function LiveRoomPage() {
     setMessageInput(next);
   };
 
-  const createMeet = async (providedMeetLink?: string) => {
+  const createMeet = async () => {
     if (!selectedChannel || selectedChannel.type !== "interview" || commandLoading) return;
     if (selectedChannel.interviewMeetLink) {
       window.open(selectedChannel.interviewMeetLink, "_blank", "noopener,noreferrer");
       return;
     }
-    if (!isOwner && !providedMeetLink) {
+    if (!isOwner) {
       toast.error("Meet link is not ready yet");
       return;
     }
-    let meetLink = providedMeetLink?.trim() ?? "";
-    if (!meetLink) {
-      window.open("https://meet.google.com/new", "_blank", "noopener,noreferrer");
-      meetLink = window.prompt("Google Meet opened in a new tab. Paste the generated meet.google.com link here to share it with the talent.")?.trim() ?? "";
-    }
-    if (!meetLink) {
-      toast.info("Meet was not shared because no Google Meet link was pasted");
-      return;
-    }
+    const meetWindow = window.open("about:blank", "_blank");
     setCommandLoading(true);
     try {
       const res = await fetch(`/api/rooms/${roomId}/interviews/${selectedChannel._id}/meet`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ meetLink }),
+        headers: { ...authHeaders() },
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to save Meet link");
+      if (!res.ok) throw new Error(data.error ?? "Failed to create Meet link");
       if (data.message) mergeMessage(data.message);
+      const meetLink = data.channel?.interviewMeetLink;
+      if (meetWindow && meetLink) {
+        meetWindow.location.href = meetLink;
+        meetWindow.opener = null;
+      } else if (meetWindow) {
+        meetWindow.close();
+      }
       await loadWorkspace(selectedChannel._id);
       toast.success("Meet link shared");
     } catch (err: any) {
-      toast.error(err.message ?? "Failed to save Meet link");
+      meetWindow?.close();
+      toast.error(err.message ?? "Failed to create Meet link");
     } finally {
       setCommandLoading(false);
     }

@@ -77,6 +77,12 @@ function normalizeGoogleMeetLink(value: unknown): string | null {
   }
 }
 
+function buildInterviewMeetLink(room: InstanceType<typeof LiveRoom>, channel: InstanceType<typeof RoomChannel>): string {
+  const roomCode = String(room.roomCode || room._id).replace(/[^a-z0-9]/gi, "").toLowerCase().slice(0, 12);
+  const channelCode = String(channel._id).replace(/[^a-z0-9]/gi, "").toLowerCase().slice(-10);
+  return `https://meet.google.com/lookup/dehix${roomCode}${channelCode}`;
+}
+
 function originalIdeaFromRoom(room: InstanceType<typeof LiveRoom>): string | undefined {
   const match = room.rawDescription.match(/^Original Idea:\n([\s\S]*?)(?:\n\nBusiness Validation:|$)/);
   return match?.[1]?.trim();
@@ -129,7 +135,7 @@ function commandHelpSummary() {
     "Available commands:",
     "/interview @name - create or open an interview channel",
     "/interview @name @name2 - create or open a multi-talent interview channel",
-    "/meet - open the saved Meet link, or use /meet <meet.google.com link> to save one",
+    "/meet - create or open the shared interview Meet link",
     "/hire @name - mark a talent as hired after confirmation",
     "/remove @name - remove a talent after confirmation",
     "/help - show this command list",
@@ -835,19 +841,14 @@ router.post("/:id/commands/preview", requireAuth, requireRoomAccess, async (req:
         res.status(400).json({ error: "/meet can only be used inside an interview channel" });
         return;
       }
-      const meetLink = normalizeGoogleMeetLink(parsed.args);
-      if (parsed.args && !meetLink) {
-        res.status(400).json({ error: "Paste a valid Google Meet link, not https://meet.google.com/new" });
-        return;
-      }
       res.json({
         commandId: nanoid(10),
         action: "meet",
-        summary: meetLink ? "Save this Google Meet link for the interview channel." : "Share the saved Google Meet link for this interview channel.",
+        summary: "Create or open the shared Google Meet link for this interview channel.",
         targets: [],
         warnings: [],
         requiresConfirmation: true,
-        payload: { channelId: String(channel._id), meetLink },
+        payload: { channelId: String(channel._id) },
       });
       return;
     }
@@ -936,11 +937,7 @@ router.post("/:id/commands/execute", requireAuth, requireRoomAccess, async (req:
         res.status(403).json({ error: "Only the business owner can create the interview Meet link" });
         return;
       }
-      const meetLink = existingMeetLink || normalizeGoogleMeetLink((payload as any).meetLink);
-      if (!meetLink) {
-        res.status(400).json({ error: "Create a Google Meet and paste its meet.google.com link first." });
-        return;
-      }
+      const meetLink = existingMeetLink || buildInterviewMeetLink(room, channel);
       channel.interviewMeetLink = meetLink;
       channel.interviewStatus = "live";
       await channel.save();
@@ -1098,11 +1095,7 @@ router.post("/:id/interviews/:channelId/meet", requireAuth, requireRoomAccess, a
       res.status(403).json({ error: "Only the business owner can create the interview Meet link" });
       return;
     }
-    const meetLink = existingMeetLink || normalizeGoogleMeetLink(req.body?.meetLink);
-    if (!meetLink) {
-      res.status(400).json({ error: "Create a Google Meet and paste its meet.google.com link first." });
-      return;
-    }
+    const meetLink = existingMeetLink || buildInterviewMeetLink(room, channel);
     channel.interviewMeetLink = meetLink;
     channel.interviewStatus = "live";
     await channel.save();
@@ -2316,7 +2309,7 @@ router.put("/:id/notes", requireAuth, requireRoomAccess, async (req: AuthRequest
 router.put("/:id/meet-link", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   const meetLink = req.body?.meetLink ? normalizeGoogleMeetLink(req.body.meetLink) : null;
   if (req.body?.meetLink && !meetLink) {
-    res.status(400).json({ error: "Paste a valid Google Meet link, not https://meet.google.com/new" });
+    res.status(400).json({ error: "Use a valid Google Meet link. https://meet.google.com/new cannot be shared." });
     return;
   }
   try {
