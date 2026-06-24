@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { DehixSyncSchema, type DehixSyncMetadata, asDehixId, ensureDehixSync } from "../lib/dehixSync.js";
 
 export interface IProjectEnquiry extends Document {
   roomId: Types.ObjectId;
@@ -6,6 +7,7 @@ export interface IProjectEnquiry extends Document {
   message: string;
   sendEmailToOffline: boolean;
   status: "sent" | "partially_sent" | "failed";
+  dehix?: DehixSyncMetadata;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -17,8 +19,18 @@ const ProjectEnquirySchema = new Schema<IProjectEnquiry>(
     message: { type: String, required: true },
     sendEmailToOffline: { type: Boolean, default: true },
     status: { type: String, enum: ["sent", "partially_sent", "failed"], default: "sent" },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { timestamps: true, collection: "dl_project_enquiries" }
 );
+
+ProjectEnquirySchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.businessId ??= asDehixId(this.businessId);
+  dehix.sourceCollection ??= "projectinvites";
+});
+
+ProjectEnquirySchema.index({ "dehix.projectId": 1, createdAt: -1 }, { sparse: true });
+ProjectEnquirySchema.index({ "dehix.businessId": 1, "dehix.syncStatus": 1 });
 
 export const ProjectEnquiry = mongoose.model<IProjectEnquiry>("ProjectEnquiry", ProjectEnquirySchema);

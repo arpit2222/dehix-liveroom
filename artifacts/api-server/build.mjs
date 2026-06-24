@@ -18,6 +18,7 @@ async function buildAll() {
     entryPoints: [
       path.resolve(artifactDir, "src/index.ts"),
       path.resolve(artifactDir, "src/seed.ts"),
+      path.resolve(artifactDir, "src/scripts/backfillDehixSyncFields.ts"),
     ],
     platform: "node",
     bundle: true,
