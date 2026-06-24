@@ -208,6 +208,8 @@ export default function LiveRoomPage() {
   const [showInterviewNotes, setShowInterviewNotes] = useState(false);
   const [interviewNotesDraft, setInterviewNotesDraft] = useState("");
   const [interviewSaving, setInterviewSaving] = useState(false);
+  const [showMeetLinkForm, setShowMeetLinkForm] = useState(false);
+  const [meetLinkDraft, setMeetLinkDraft] = useState("");
   const socketRef = useRef<Socket | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -390,6 +392,8 @@ export default function LiveRoomPage() {
     setPendingCommand(null);
     setShowInterviewNotes(false);
     setInterviewNotesDraft(selectedChannel?.interviewNotes ?? "");
+    setShowMeetLinkForm(false);
+    setMeetLinkDraft("");
   }, [selectedChannelId, selectedChannel?.interviewNotes]);
 
   useEffect(() => {
@@ -511,28 +515,33 @@ export default function LiveRoomPage() {
       toast.error("Meet link is not ready yet");
       return;
     }
-    const meetWindow = window.open("about:blank", "_blank");
+    window.open("https://meet.google.com/new", "_blank", "noopener,noreferrer");
+    setShowMeetLinkForm(true);
+  };
+
+  const shareMeetLink = async () => {
+    if (!selectedChannel || selectedChannel.type !== "interview" || commandLoading) return;
+    const meetLink = meetLinkDraft.trim();
+    if (!meetLink) {
+      toast.error("Paste the Google Meet link first");
+      return;
+    }
     setCommandLoading(true);
     try {
       const res = await fetch(`/api/rooms/${roomId}/interviews/${selectedChannel._id}/meet`, {
         method: "POST",
-        headers: { ...authHeaders() },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ meetLink }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to create Meet link");
+      if (!res.ok) throw new Error(data.error ?? "Failed to share Meet link");
       if (data.message) mergeMessage(data.message);
-      const meetLink = data.channel?.interviewMeetLink;
-      if (meetWindow && meetLink) {
-        meetWindow.location.href = meetLink;
-        meetWindow.opener = null;
-      } else if (meetWindow) {
-        meetWindow.close();
-      }
+      setShowMeetLinkForm(false);
+      setMeetLinkDraft("");
       await loadWorkspace(selectedChannel._id);
       toast.success("Meet link shared");
     } catch (err: any) {
-      meetWindow?.close();
-      toast.error(err.message ?? "Failed to create Meet link");
+      toast.error(err.message ?? "Failed to share Meet link");
     } finally {
       setCommandLoading(false);
     }
@@ -1304,6 +1313,43 @@ export default function LiveRoomPage() {
                 </button>
               </div>
             </header>
+
+            {selectedChannel?.type === "interview" && isOwner && showMeetLinkForm && !selectedChannel.interviewMeetLink && (
+              <div className="shrink-0 border-b border-border/40 bg-card/35 px-5 py-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    value={meetLinkDraft}
+                    onChange={(event) => setMeetLinkDraft(event.target.value)}
+                    placeholder="https://meet.google.com/xxx-yyyy-zzz"
+                    className="h-9 min-w-0 flex-1 rounded-md border border-border/45 bg-background/70 px-3 text-xs text-foreground outline-none focus:border-primary/40"
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => window.open("https://meet.google.com/new", "_blank", "noopener,noreferrer")}
+                      className="h-9 text-xs"
+                    >
+                      <Video className="h-3.5 w-3.5 mr-1" /> Open Meet
+                    </Button>
+                    <Button size="sm" onClick={() => void shareMeetLink()} disabled={commandLoading} className="h-9 text-xs">
+                      Share
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setShowMeetLinkForm(false);
+                        setMeetLinkDraft("");
+                      }}
+                      className="h-9 px-2"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Notes editor drawer for interview channel */}
             {selectedChannel?.type === "interview" && showInterviewNotes && isOwner && (

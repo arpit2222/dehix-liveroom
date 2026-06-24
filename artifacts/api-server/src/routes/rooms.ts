@@ -77,12 +77,6 @@ function normalizeGoogleMeetLink(value: unknown): string | null {
   }
 }
 
-function buildInterviewMeetLink(room: InstanceType<typeof LiveRoom>, channel: InstanceType<typeof RoomChannel>): string {
-  const roomCode = String(room.roomCode || room._id).replace(/[^a-z0-9]/gi, "").toLowerCase().slice(0, 12);
-  const channelCode = String(channel._id).replace(/[^a-z0-9]/gi, "").toLowerCase().slice(-10);
-  return `https://meet.google.com/lookup/dehix${roomCode}${channelCode}`;
-}
-
 function originalIdeaFromRoom(room: InstanceType<typeof LiveRoom>): string | undefined {
   const match = room.rawDescription.match(/^Original Idea:\n([\s\S]*?)(?:\n\nBusiness Validation:|$)/);
   return match?.[1]?.trim();
@@ -135,7 +129,7 @@ function commandHelpSummary() {
     "Available commands:",
     "/interview @name - create or open an interview channel",
     "/interview @name @name2 - create or open a multi-talent interview channel",
-    "/meet - create or open the shared interview Meet link",
+    "/meet <meet.google.com link> - share a real Google Meet link in this interview",
     "/hire @name - mark a talent as hired after confirmation",
     "/remove @name - remove a talent after confirmation",
     "/help - show this command list",
@@ -841,14 +835,24 @@ router.post("/:id/commands/preview", requireAuth, requireRoomAccess, async (req:
         res.status(400).json({ error: "/meet can only be used inside an interview channel" });
         return;
       }
+      const existingMeetLink = typeof channel.interviewMeetLink === "string" ? channel.interviewMeetLink : "";
+      const meetLink = parsed.args ? normalizeGoogleMeetLink(parsed.args) : null;
+      if (parsed.args && !meetLink) {
+        res.status(400).json({ error: "Use a valid Google Meet link like https://meet.google.com/xxx-yyyy-zzz" });
+        return;
+      }
+      if (!existingMeetLink && !meetLink && !isRoomOwner(room, req.userId)) {
+        res.status(400).json({ error: "Meet link is not ready yet" });
+        return;
+      }
       res.json({
         commandId: nanoid(10),
         action: "meet",
-        summary: "Create or open the shared Google Meet link for this interview channel.",
+        summary: meetLink ? "Share this Google Meet link for the interview channel." : "Open the saved Google Meet link for this interview channel.",
         targets: [],
         warnings: [],
         requiresConfirmation: true,
-        payload: { channelId: String(channel._id) },
+        payload: { channelId: String(channel._id), meetLink },
       });
       return;
     }
@@ -937,7 +941,11 @@ router.post("/:id/commands/execute", requireAuth, requireRoomAccess, async (req:
         res.status(403).json({ error: "Only the business owner can create the interview Meet link" });
         return;
       }
-      const meetLink = existingMeetLink || buildInterviewMeetLink(room, channel);
+      const meetLink = existingMeetLink || normalizeGoogleMeetLink((payload as any).meetLink);
+      if (!meetLink) {
+        res.status(400).json({ error: "Open Google Meet, copy the real meet.google.com link, then share it here." });
+        return;
+      }
       channel.interviewMeetLink = meetLink;
       channel.interviewStatus = "live";
       await channel.save();
@@ -1095,7 +1103,11 @@ router.post("/:id/interviews/:channelId/meet", requireAuth, requireRoomAccess, a
       res.status(403).json({ error: "Only the business owner can create the interview Meet link" });
       return;
     }
-    const meetLink = existingMeetLink || buildInterviewMeetLink(room, channel);
+    const meetLink = existingMeetLink || normalizeGoogleMeetLink(req.body?.meetLink);
+    if (!meetLink) {
+      res.status(400).json({ error: "Open Google Meet, copy the real meet.google.com link, then share it here." });
+      return;
+    }
     channel.interviewMeetLink = meetLink;
     channel.interviewStatus = "live";
     await channel.save();
