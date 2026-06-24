@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { DehixSyncSchema, type DehixSyncMetadata, asDehixId, ensureDehixSync } from "../lib/dehixSync.js";
 
 export type EnquiryResponseStatus = "pending" | "interested" | "not_interested" | "ask_question" | "proposal_submitted";
 
@@ -16,6 +17,7 @@ export interface IProjectEnquiryRecipient extends Document {
   responseStatus: EnquiryResponseStatus;
   responseMessage?: string;
   respondedAt?: Date;
+  dehix?: DehixSyncMetadata;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,11 +46,22 @@ const ProjectEnquiryRecipientSchema = new Schema<IProjectEnquiryRecipient>(
     },
     responseMessage: { type: String },
     respondedAt: { type: Date },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { timestamps: true, collection: "dl_project_enquiry_recipients" }
 );
 
+ProjectEnquiryRecipientSchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.freelancerId ??= asDehixId(this.freelancerId);
+  dehix.projectProfileId ??= asDehixId(this.roleId);
+  dehix.projectInviteId ??= asDehixId(this._id);
+  dehix.sourceCollection ??= "projectinvites";
+});
+
 ProjectEnquiryRecipientSchema.index({ roomId: 1, freelancerId: 1, roleId: 1, createdAt: -1 });
+ProjectEnquiryRecipientSchema.index({ "dehix.projectId": 1, "dehix.freelancerId": 1, "dehix.projectProfileId": 1 }, { sparse: true });
+ProjectEnquiryRecipientSchema.index({ "dehix.projectInviteId": 1 }, { sparse: true });
 
 export const ProjectEnquiryRecipient = mongoose.model<IProjectEnquiryRecipient>(
   "ProjectEnquiryRecipient",

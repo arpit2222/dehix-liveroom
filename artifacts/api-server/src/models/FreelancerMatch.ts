@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { DehixSyncSchema, type DehixSyncMetadata, asDehixId, ensureDehixSync } from "../lib/dehixSync.js";
 
 export interface IFreelancerMatch extends Document {
   roomId: Types.ObjectId;
@@ -17,6 +18,7 @@ export interface IFreelancerMatch extends Document {
     budgetFit: number;
   };
   status: "recommended" | "shortlisted" | "enquired" | "hired" | "dismissed";
+  dehix?: DehixSyncMetadata;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,11 +46,21 @@ const FreelancerMatchSchema = new Schema<IFreelancerMatch>(
       default: "recommended",
       index: true,
     },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { timestamps: true, collection: "dl_freelancer_matches" }
 );
 
+FreelancerMatchSchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.freelancerId ??= asDehixId(this.freelancerId);
+  dehix.projectProfileId ??= asDehixId(this.roleId);
+  dehix.sourceCollection ??= "freelancerprofiles";
+});
+
 FreelancerMatchSchema.index({ roomId: 1, roleId: 1, freelancerId: 1 }, { unique: true });
 FreelancerMatchSchema.index({ roomId: 1, roleId: 1, matchScore: -1 });
+FreelancerMatchSchema.index({ "dehix.projectId": 1, "dehix.projectProfileId": 1, matchScore: -1 }, { sparse: true });
+FreelancerMatchSchema.index({ "dehix.freelancerId": 1, "dehix.syncStatus": 1 });
 
 export const FreelancerMatch = mongoose.model<IFreelancerMatch>("FreelancerMatch", FreelancerMatchSchema);

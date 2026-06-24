@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { DehixSyncSchema, type DehixSyncMetadata, asDehixId, ensureDehixSync } from "../lib/dehixSync.js";
 
 export interface ISbtCredential extends Document {
   userId: Types.ObjectId;
@@ -12,6 +13,7 @@ export interface ISbtCredential extends Document {
   onChainTx?: string;
   issuedAt: Date;
   embeddingText?: string;
+  dehix?: DehixSyncMetadata;
 }
 
 const SbtCredentialSchema = new Schema<ISbtCredential>(
@@ -27,8 +29,20 @@ const SbtCredentialSchema = new Schema<ISbtCredential>(
     onChainTx: { type: String },
     issuedAt: { type: Date, default: Date.now },
     embeddingText: { type: String },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { collection: "dl_sbt_credentials" }
 );
+
+SbtCredentialSchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.freelancerId ??= asDehixId(this.userId);
+  dehix.verificationId ??= asDehixId(this._id);
+  dehix.sourceCollection ??= "freelancers.attributes";
+  dehix.status ??= this.status === "verified" ? "VERIFIED" : this.status === "revoked" ? "REJECTED" : "PENDING";
+});
+
+SbtCredentialSchema.index({ "dehix.freelancerId": 1, skillDomain: 1 }, { sparse: true });
+SbtCredentialSchema.index({ "dehix.verificationId": 1 }, { sparse: true });
 
 export const SbtCredential = mongoose.model<ISbtCredential>("SbtCredential", SbtCredentialSchema);

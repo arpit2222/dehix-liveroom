@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { DehixSyncSchema, type DehixSyncMetadata, asDehixId, ensureDehixSync } from "../lib/dehixSync.js";
 
 export type ActivityType =
   | "room_created"
@@ -28,6 +29,7 @@ export interface IRoomActivity extends Document {
   actorId?: Types.ObjectId;
   actorName?: string;
   meta?: Record<string, unknown>;
+  dehix?: DehixSyncMetadata;
   createdAt: Date;
 }
 
@@ -38,8 +40,18 @@ const RoomActivitySchema = new Schema<IRoomActivity>(
     actorId: { type: Schema.Types.ObjectId, ref: "User" },
     actorName: { type: String },
     meta: { type: Schema.Types.Mixed },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { timestamps: { createdAt: true, updatedAt: false }, collection: "dl_room_activity" }
 );
+
+RoomActivitySchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.userId ??= asDehixId(this.actorId);
+  dehix.sourceCollection ??= "live_room_activity";
+});
+
+RoomActivitySchema.index({ "dehix.projectId": 1, createdAt: -1 }, { sparse: true });
+RoomActivitySchema.index({ "dehix.userId": 1, createdAt: -1 }, { sparse: true });
 
 export const RoomActivity = mongoose.model<IRoomActivity>("RoomActivity", RoomActivitySchema);

@@ -1,4 +1,11 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import {
+  DehixSyncSchema,
+  type DehixSyncMetadata,
+  asDehixId,
+  ensureDehixSync,
+  mapRoomStatusToDehixProjectStatus,
+} from "../lib/dehixSync.js";
 
 export interface ILiveRoom extends Document {
   roomCode: string;
@@ -11,6 +18,7 @@ export interface ILiveRoom extends Document {
   meetLink?: string;
   notes?: string;
   contractedAt?: Date;
+  dehix?: DehixSyncMetadata;
   createdAt: Date;
 }
 
@@ -30,8 +38,20 @@ const LiveRoomSchema = new Schema<ILiveRoom>(
     meetLink: { type: String },
     notes: { type: String },
     contractedAt: { type: Date },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { timestamps: true, collection: "dl_live_rooms" }
 );
+
+LiveRoomSchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.businessId ??= asDehixId(this.businessId);
+  dehix.projectId ??= asDehixId(this._id);
+  dehix.status = mapRoomStatusToDehixProjectStatus(this.status) ?? dehix.status;
+  dehix.sourceCollection ??= "projects";
+});
+
+LiveRoomSchema.index({ "dehix.projectId": 1 }, { sparse: true });
+LiveRoomSchema.index({ "dehix.businessId": 1, "dehix.syncStatus": 1 });
 
 export const LiveRoom = mongoose.model<ILiveRoom>("LiveRoom", LiveRoomSchema);

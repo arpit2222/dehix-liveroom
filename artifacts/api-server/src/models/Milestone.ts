@@ -1,4 +1,11 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import {
+  DehixSyncSchema,
+  type DehixSyncMetadata,
+  asDehixId,
+  ensureDehixSync,
+  mapMilestoneStatusToDehix,
+} from "../lib/dehixSync.js";
 
 export interface IMilestone extends Document {
   roomId: Types.ObjectId;
@@ -7,6 +14,7 @@ export interface IMilestone extends Document {
   amountUsd?: number;
   dueDate?: Date;
   status: "pending" | "in_progress" | "submitted" | "approved" | "released";
+  dehix?: DehixSyncMetadata;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -23,8 +31,19 @@ const MilestoneSchema = new Schema<IMilestone>(
       enum: ["pending", "in_progress", "submitted", "approved", "released"],
       default: "pending",
     },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { timestamps: true, collection: "dl_milestones" }
 );
+
+MilestoneSchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.milestoneId ??= asDehixId(this._id);
+  dehix.status = mapMilestoneStatusToDehix(this.status) ?? dehix.status;
+  dehix.sourceCollection ??= "milestones";
+});
+
+MilestoneSchema.index({ roomId: 1, status: 1 });
+MilestoneSchema.index({ "dehix.projectId": 1, "dehix.milestoneId": 1 }, { sparse: true });
 
 export const Milestone = mongoose.model<IMilestone>("Milestone", MilestoneSchema);

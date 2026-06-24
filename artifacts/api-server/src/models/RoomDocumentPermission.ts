@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { DehixSyncSchema, type DehixSyncMetadata, asDehixId, ensureDehixSync } from "../lib/dehixSync.js";
 
 export interface IRoomDocumentPermission extends Document {
   roomId: Types.ObjectId;
@@ -9,6 +10,7 @@ export interface IRoomDocumentPermission extends Document {
   grantedBy: Types.ObjectId;
   grantedAt: Date;
   revokedAt?: Date;
+  dehix?: DehixSyncMetadata;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -23,10 +25,20 @@ const RoomDocumentPermissionSchema = new Schema<IRoomDocumentPermission>(
     grantedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
     grantedAt: { type: Date, default: Date.now },
     revokedAt: { type: Date },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { timestamps: true, collection: "dl_room_document_permissions" }
 );
 
+RoomDocumentPermissionSchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.freelancerId ??= asDehixId(this.talentId);
+  dehix.userId ??= asDehixId(this.grantedBy);
+  dehix.entityId ??= this.docType;
+  dehix.sourceCollection ??= "live_room_document_permissions";
+});
+
 RoomDocumentPermissionSchema.index({ roomId: 1, talentId: 1, docType: 1 }, { unique: true });
+RoomDocumentPermissionSchema.index({ "dehix.projectId": 1, "dehix.freelancerId": 1, "dehix.entityId": 1 }, { sparse: true });
 
 export const RoomDocumentPermission = mongoose.model<IRoomDocumentPermission>("RoomDocumentPermission", RoomDocumentPermissionSchema);

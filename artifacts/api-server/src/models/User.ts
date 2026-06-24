@@ -1,4 +1,12 @@
 import mongoose, { Schema, Document } from "mongoose";
+import {
+  DehixSyncSchema,
+  type DehixSyncMetadata,
+  asDehixId,
+  dehixCollectionForRole,
+  ensureDehixSync,
+  toDehixRole,
+} from "../lib/dehixSync.js";
 
 export interface IUser extends Document {
   email: string;
@@ -24,6 +32,7 @@ export interface IUser extends Document {
     projectEnquiryEmail?: boolean;
     inAppNotifications?: boolean;
   };
+  dehix?: DehixSyncMetadata;
   createdAt: Date;
 }
 
@@ -57,8 +66,19 @@ const UserSchema = new Schema<IUser>(
       projectEnquiryEmail: { type: Boolean, default: true },
       inAppNotifications: { type: Boolean, default: true },
     },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { timestamps: true, collection: "dl_users" }
 );
+
+UserSchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.userId ??= asDehixId(this._id);
+  dehix.role ??= toDehixRole(this.role);
+  dehix.sourceCollection ??= dehixCollectionForRole(this.role);
+});
+
+UserSchema.index({ "dehix.userId": 1 }, { sparse: true });
+UserSchema.index({ "dehix.role": 1, "dehix.syncStatus": 1 });
 
 export const User = mongoose.model<IUser>("User", UserSchema);

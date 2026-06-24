@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { DehixSyncSchema, type DehixSyncMetadata, asDehixId, ensureDehixSync } from "../lib/dehixSync.js";
 
 export interface ILaunchSession extends Document {
   userId: Types.ObjectId;
@@ -32,6 +33,7 @@ export interface ILaunchSession extends Document {
   businessBlueprintPdfHash?: string;
   businessBlueprintPdfError?: string;
   businessBlueprintPdfGeneratedAt?: Date;
+  dehix?: DehixSyncMetadata;
   
   createdAt: Date;
   updatedAt: Date;
@@ -73,8 +75,19 @@ const LaunchSessionSchema = new Schema<ILaunchSession>(
     businessBlueprintPdfHash: { type: String },
     businessBlueprintPdfError: { type: String },
     businessBlueprintPdfGeneratedAt: { type: Date },
+    dehix: { type: DehixSyncSchema, default: () => ({}) },
   },
   { timestamps: true, collection: "dl_launch_sessions" }
 );
+
+LaunchSessionSchema.pre("validate", function () {
+  const dehix = ensureDehixSync(this);
+  dehix.userId ??= asDehixId(this.userId);
+  dehix.businessId ??= asDehixId(this.userId);
+  dehix.sourceCollection ??= "projects";
+});
+
+LaunchSessionSchema.index({ "dehix.businessId": 1, createdAt: -1 }, { sparse: true });
+LaunchSessionSchema.index({ "dehix.projectId": 1 }, { sparse: true });
 
 export const LaunchSession = mongoose.model<ILaunchSession>("LaunchSession", LaunchSessionSchema);
