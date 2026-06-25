@@ -60,6 +60,14 @@ app.use("/api/auth", authLimiter);
 app.use(express.json({ limit: process.env["JSON_BODY_LIMIT"] ?? "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+app.get("/", (_req, res) => {
+  res.json({
+    service: "DEHIX Live Room API",
+    status: "ok",
+    health: "/api/healthz",
+  });
+});
+
 app.use("/api", router);
 
 export default app;
