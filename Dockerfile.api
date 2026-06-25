@@ -1,0 +1,31 @@
+FROM node:24-bookworm-slim
+
+WORKDIR /app
+
+ENV PORT=8080
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
+COPY package.json package-lock.json .npmrc ./
+COPY artifacts/api-server/package.json artifacts/api-server/package.json
+COPY artifacts/dehix-live-room/package.json artifacts/dehix-live-room/package.json
+COPY lib/api-client-react/package.json lib/api-client-react/package.json
+COPY lib/api-spec/package.json lib/api-spec/package.json
+COPY lib/api-zod/package.json lib/api-zod/package.json
+COPY lib/db/package.json lib/db/package.json
+COPY lib/integrations-openai-ai-react/package.json lib/integrations-openai-ai-react/package.json
+COPY lib/integrations-openai-ai-server/package.json lib/integrations-openai-ai-server/package.json
+COPY scripts/package.json scripts/package.json
+
+RUN npm ci --include=dev --ignore-scripts
+
+COPY . .
+
+RUN npm run build --workspace @workspace/api-server
+
+WORKDIR /app/artifacts/api-server
+
+ENV NODE_ENV=production
+
+EXPOSE 8080
+
+CMD ["node", "--enable-source-maps", "dist/index.mjs"]
