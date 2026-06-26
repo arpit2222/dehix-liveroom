@@ -10,6 +10,7 @@ import { FreelancerMatch } from "../models/FreelancerMatch.js";
 import { ProjectShortlist } from "../models/ProjectShortlist.js";
 import { ProjectEnquiry } from "../models/ProjectEnquiry.js";
 import { ProjectEnquiryRecipient } from "../models/ProjectEnquiryRecipient.js";
+import { HireOffer, type HireOfferRateType } from "../models/HireOffer.js";
 import { Notification } from "../models/Notification.js";
 import { User } from "../models/User.js";
 import { Ticket } from "../models/Ticket.js";
@@ -44,6 +45,7 @@ import { TECH_MANDATORY_QUESTIONS } from "../lib/launchQuestions.js";
 import { requireRoomAccess, requireRoomOwner } from "../lib/roomAccess.js";
 import { calculateRoomFreelancerMatches } from "../lib/freelancerLinking.js";
 import { RoomInviteError, inviteTalentToRoom } from "../lib/roomInvites.js";
+import { formatHireOfferList, openHireOfferStatuses } from "../lib/hireOffers.js";
 import {
   STANDARD_ROOM_DOCUMENTS,
   createTalentJoinedSystemMessage,
@@ -75,6 +77,37 @@ function normalizeGoogleMeetLink(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+const OFFER_RATE_TYPES = new Set<HireOfferRateType>(["fixed", "hourly", "weekly", "monthly"]);
+
+function textField(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function numberField(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function dateField(value: unknown): Date | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+function milestonePlanField(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 12).map((item) => {
+    const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    return {
+      title: textField(record["title"], 160),
+      description: textField(record["description"], 1200) || undefined,
+      amountUsd: numberField(record["amountUsd"]),
+      dueDate: dateField(record["dueDate"]),
+    };
+  }).filter((milestone) => milestone.title);
 }
 
 function originalIdeaFromRoom(room: InstanceType<typeof LiveRoom>): string | undefined {
@@ -561,6 +594,18 @@ router.get("/:id/activity", requireAuth, requireRoomAccess, async (req: AuthRequ
             return "Freelancer enquiry sent";
           case "freelancer_enquiry_responded":
             return "Freelancer responded to enquiry";
+          case "hire_offer_sent":
+            return "Hire offer sent";
+          case "hire_offer_accepted":
+            return "Hire offer accepted";
+          case "hire_offer_declined":
+            return "Hire offer declined";
+          case "hire_offer_changes_requested":
+            return "Offer changes requested";
+          case "hire_offer_withdrawn":
+            return "Hire offer withdrawn";
+          case "hire_offer_contracted":
+            return "Hire offer contracted";
           case "freelancer_hired":
             return "Freelancer hired";
           case "room_contracted":
@@ -690,7 +735,7 @@ router.get("/:id/workspace", requireAuth, requireRoomAccess, async (req: AuthReq
       return;
     }
     await ensureWorkspaceChannels(room);
-    const [roles, participants, tickets, milestones, nda, channels, docCatalog] = await Promise.all([
+    const [roles, participants, tickets, milestones, nda, channels, docCatalog, offers] = await Promise.all([
       RoomRole.find({ roomId: room._id }),
       RoomParticipant.find({ roomId: room._id }).populate("userId", "-password"),
       Ticket.find({ roomId: room._id }),
@@ -698,6 +743,11 @@ router.get("/:id/workspace", requireAuth, requireRoomAccess, async (req: AuthReq
       Nda.findOne({ roomId: room._id }),
       getVisibleChannels(room, req.userId!),
       getRoomDocumentCatalog(room, req.userId!),
+      HireOffer.find(
+        isRoomOwner(room, req.userId)
+          ? { roomId: room._id }
+          : { roomId: room._id, freelancerId: req.userId }
+      ).sort({ createdAt: -1 }),
     ]);
     const currentParticipant = await RoomParticipant.findOne({
       roomId: room._id,
@@ -713,6 +763,7 @@ router.get("/:id/workspace", requireAuth, requireRoomAccess, async (req: AuthReq
       tickets: tickets.map(formatTicket),
       milestones: milestones.map(formatMilestone),
       nda: nda ? formatNda(nda) : null,
+      offers: await formatHireOfferList(offers),
       channels: displayChannels,
       documents: docCatalog,
       permissionMatrix,
@@ -1455,6 +1506,140 @@ router.get("/:id/enquiries", requireAuth, requireRoomOwner, async (req: AuthRequ
   }
 });
 
+router.get("/:id/offers", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findOne({ _id: req.params["id"], businessId: req.userId });
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    const offers = await HireOffer.find({ roomId: room._id }).sort({ createdAt: -1 });
+    res.json({ roomId: room._id, offers: await formatHireOfferList(offers) });
+  } catch (err) {
+    req.log.error({ err }, "getRoomOffers error");
+    res.status(500).json({ error: "Failed to get hire offers" });
+  }
+});
+
+router.post("/:id/offers", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findOne({ _id: req.params["id"], businessId: req.userId });
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+
+    const freelancerId = textField(req.body?.freelancerId, 80);
+    const roleId = textField(req.body?.roleId, 80);
+    const interviewChannelId = textField(req.body?.interviewChannelId, 80);
+    const scopeSummary = textField(req.body?.scopeSummary, 4000);
+    const terms = textField(req.body?.terms, 4000);
+    const rateType = OFFER_RATE_TYPES.has(req.body?.rateType) ? req.body.rateType as HireOfferRateType : "fixed";
+    if (!freelancerId || !roleId || !interviewChannelId || !scopeSummary || !terms) {
+      res.status(400).json({ error: "freelancerId, roleId, interviewChannelId, scopeSummary, and terms are required" });
+      return;
+    }
+
+    const [freelancer, role, interview, acceptedForRole] = await Promise.all([
+      User.findById(freelancerId).select("-password"),
+      RoomRole.findOne({ _id: roleId, roomId: room._id }),
+      RoomChannel.findOne({ _id: interviewChannelId, roomId: room._id, type: "interview" }),
+      HireOffer.findOne({ roomId: room._id, roleId, status: { $in: ["accepted", "contracted"] } }),
+    ]);
+    if (!freelancer) {
+      res.status(404).json({ error: "Freelancer not found" });
+      return;
+    }
+    if (!role) {
+      res.status(400).json({ error: "Role does not belong to this room" });
+      return;
+    }
+    if (acceptedForRole) {
+      res.status(409).json({ error: "This role already has an accepted offer" });
+      return;
+    }
+    if (!interview) {
+      res.status(400).json({ error: "Completed interview channel is required before sending an offer" });
+      return;
+    }
+    if (interview.interviewStatus !== "completed") {
+      res.status(400).json({ error: "Mark the interview complete before sending an offer" });
+      return;
+    }
+    if (!interview.participantIds.map(String).includes(freelancerId)) {
+      res.status(400).json({ error: "Freelancer must be part of the completed interview" });
+      return;
+    }
+
+    const now = new Date();
+    const baseOffer = {
+      roomId: room._id,
+      businessId: req.userId!,
+      freelancerId,
+      roleId: role._id,
+      interviewChannelId: interview._id,
+      status: "sent" as const,
+      amountUsd: numberField(req.body?.amountUsd),
+      rateType,
+      rateAmountUsd: numberField(req.body?.rateAmountUsd),
+      startDate: dateField(req.body?.startDate),
+      expectedEndDate: dateField(req.body?.expectedEndDate),
+      scopeSummary,
+      terms,
+      milestonePlan: milestonePlanField(req.body?.milestonePlan),
+      responseMessage: undefined,
+      sentAt: now,
+      respondedAt: undefined,
+      withdrawnAt: undefined,
+      expiresAt: dateField(req.body?.expiresAt),
+    };
+    const existingOpenOffer = await HireOffer.findOne({
+      roomId: room._id,
+      roleId: role._id,
+      freelancerId,
+      status: { $in: openHireOfferStatuses },
+    });
+    const offer = existingOpenOffer
+      ? await HireOffer.findByIdAndUpdate(existingOpenOffer._id, baseOffer, { new: true, runValidators: true })
+      : await HireOffer.create(baseOffer);
+    if (!offer) {
+      res.status(500).json({ error: "Failed to save hire offer" });
+      return;
+    }
+
+    if (["matching", "open"].includes(room.status)) {
+      room.status = "assembling";
+      await room.save();
+    }
+
+    await Notification.create({
+      userId: freelancerId,
+      type: "hire_offer",
+      title: "New hire offer",
+      message: `${room.title}: ${role.roleTitle} offer is ready for review.`,
+      roomId: room._id,
+    });
+    RoomActivity.create({
+      roomId: room._id,
+      type: "hire_offer_sent",
+      actorId: req.userId,
+      meta: { offerId: String(offer._id), freelancerId, role: role.roleTitle },
+    }).catch(() => {});
+    const io = getIo();
+    if (io) {
+      io.to(`talent:${freelancerId}`).emit("talent:hire_offer", { roomId: room._id, offerId: offer._id, roleId: role._id });
+      io.to(`room:${room._id}`).emit("room:hire_offer_sent", { roomId: room._id, offerId: offer._id });
+      io.to(`room:${room._id}`).emit("room:status_changed", { roomId: room._id, status: room.status });
+    }
+
+    const [formattedOffer] = await formatHireOfferList([offer]);
+    res.status(existingOpenOffer ? 200 : 201).json(formattedOffer);
+  } catch (err) {
+    req.log.error({ err }, "sendHireOffer error");
+    res.status(500).json({ error: "Failed to send hire offer" });
+  }
+});
+
 router.post("/:id/hire", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
   try {
     const roomId = String(req.params["id"]);
@@ -1555,6 +1740,10 @@ router.post("/:id/contract", requireAuth, requireRoomOwner, async (req: AuthRequ
       { new: true }
     );
     if (!room) { res.status(404).json({ error: "Room not found" }); return; }
+    await HireOffer.updateMany(
+      { roomId: req.params["id"], status: "accepted" },
+      { status: "contracted", contractedAt: new Date() }
+    );
     const io = getIo();
     if (io) io.to(`room:${req.params["id"]}`).emit("room:status_changed", { roomId: req.params["id"], status: "contracted" });
     RoomActivity.create({ roomId: String(req.params["id"]), type: "room_contracted", actorId: req.userId }).catch(() => { });
@@ -1626,6 +1815,7 @@ router.delete("/:id", requireAuth, requireRoomOwner, async (req: AuthRequest, re
       ["shortlists", ProjectShortlist.deleteMany({ roomId: room._id })],
       ["enquiries", ProjectEnquiry.deleteMany({ roomId: room._id })],
       ["enquiryRecipients", ProjectEnquiryRecipient.deleteMany({ roomId: room._id })],
+      ["hireOffers", HireOffer.deleteMany({ roomId: room._id })],
       ["notifications", Notification.deleteMany({ roomId: room._id })],
       ["generatedDocs", GeneratedDoc.deleteMany({ roomId: room._id })],
       ["aiChatMessages", AiChatMessage.deleteMany({ roomId: room._id })],
