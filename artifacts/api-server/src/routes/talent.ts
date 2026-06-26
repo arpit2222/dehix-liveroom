@@ -8,10 +8,13 @@ import { Milestone } from "../models/Milestone.js";
 import { RoomActivity } from "../models/RoomActivity.js";
 import { ProjectEnquiry } from "../models/ProjectEnquiry.js";
 import { ProjectEnquiryRecipient } from "../models/ProjectEnquiryRecipient.js";
+import { HireOffer } from "../models/HireOffer.js";
+import { Notification } from "../models/Notification.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { UpdateAvailabilityBody, RespondInviteBody } from "@workspace/api-zod";
 import { getIo } from "../socket.js";
 import { createTalentJoinedSystemMessage, ensureDirectChannelForParticipant, formatRoomChannel } from "../lib/roomWorkspace.js";
+import { acceptHireOffer, formatHireOfferList } from "../lib/hireOffers.js";
 
 const router = Router();
 
@@ -296,6 +299,86 @@ router.get("/enquiries", requireAuth, async (req: AuthRequest, res) => {
     }));
   } catch (err) {
     res.status(500).json({ error: "Failed to get enquiries" });
+  }
+});
+
+router.get("/offers", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const offers = await HireOffer.find({ freelancerId: req.userId })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.json(await formatHireOfferList(offers));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to get hire offers" });
+  }
+});
+
+router.patch("/offers/:offerId/respond", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const response = typeof req.body?.status === "string" ? req.body.status : "";
+    const responseMessage = typeof req.body?.message === "string" ? req.body.message.trim().slice(0, 2000) : undefined;
+    if (!["accepted", "declined", "changes_requested"].includes(response)) {
+      res.status(400).json({ error: "Invalid offer response" });
+      return;
+    }
+
+    const offer = await HireOffer.findOne({ _id: req.params["offerId"], freelancerId: req.userId });
+    if (!offer) {
+      res.status(404).json({ error: "Hire offer not found" });
+      return;
+    }
+    if (!["sent", "changes_requested"].includes(offer.status)) {
+      res.status(400).json({ error: "This offer is no longer open for response" });
+      return;
+    }
+
+    if (response === "accepted") {
+      offer.responseMessage = responseMessage;
+      try {
+        const result = await acceptHireOffer(offer, req.userId!);
+        const [formattedOffer] = await formatHireOfferList([result.offer]);
+        res.json({ success: true, offer: formattedOffer });
+      } catch (err: any) {
+        res.status(409).json({ error: err.message ?? "This offer can no longer be accepted" });
+      }
+      return;
+    }
+
+    offer.status = response === "declined" ? "declined" : "changes_requested";
+    offer.responseMessage = responseMessage;
+    offer.respondedAt = new Date();
+    await offer.save();
+
+    const [room, role, currentUser] = await Promise.all([
+      LiveRoom.findById(offer.roomId),
+      RoomRole.findById(offer.roleId),
+      User.findById(req.userId).select("name"),
+    ]);
+    await Notification.create({
+      userId: offer.businessId,
+      type: "hire_offer",
+      title: response === "declined" ? "Hire offer declined" : "Offer changes requested",
+      message: `${currentUser?.name ?? "A freelancer"} ${response === "declined" ? "declined" : "requested changes to"} the ${role?.roleTitle ?? "project"} offer.`,
+      roomId: offer.roomId,
+    }).catch(() => {});
+    RoomActivity.create({
+      roomId: offer.roomId,
+      type: response === "declined" ? "hire_offer_declined" : "hire_offer_changes_requested",
+      actorId: req.userId,
+      meta: { offerId: String(offer._id), role: role?.roleTitle ?? null, responseMessage },
+    }).catch(() => {});
+    const io = getIo();
+    if (io) {
+      io.to(`room:${offer.roomId}`).emit(
+        response === "declined" ? "room:hire_offer_declined" : "room:hire_offer_changes_requested",
+        { roomId: offer.roomId, offerId: offer._id, responseStatus: offer.status }
+      );
+    }
+
+    const [formattedOffer] = await formatHireOfferList([offer]);
+    res.json({ success: true, offer: formattedOffer, room: room ? { _id: room._id, title: room.title } : null });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to respond to hire offer" });
   }
 });
 

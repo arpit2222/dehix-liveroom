@@ -39,12 +39,14 @@ export default function TalentDashboard() {
   const { data: credentials } = useGetTalentCredentials(user?._id ?? "", { query: { enabled: !!user?._id, queryKey: getGetTalentCredentialsQueryKey(user?._id ?? "") } });
   const [myRooms, setMyRooms] = useState<any[]>([]);
   const [projectEnquiries, setProjectEnquiries] = useState<any[]>([]);
+  const [hireOffers, setHireOffers] = useState<any[]>([]);
   const [copiedRoomCode, setCopiedRoomCode] = useState<string | null>(null);
   const [editingProfile, setEditingProfile] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileWallet, setProfileWallet] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
   const [respondingEnquiryId, setRespondingEnquiryId] = useState<string | null>(null);
+  const [respondingOfferId, setRespondingOfferId] = useState<string | null>(null);
 
   const loadProjectEnquiries = useCallback(async () => {
     if (!isAuthenticated) return;
@@ -55,6 +57,18 @@ export default function TalentDashboard() {
       setProjectEnquiries(Array.isArray(data) ? data : []);
     } catch {
       setProjectEnquiries([]);
+    }
+  }, [isAuthenticated]);
+
+  const loadHireOffers = useCallback(async () => {
+    if (!isAuthenticated) return;
+    const token = localStorage.getItem("dehix_token");
+    try {
+      const res = await fetch("/api/talent/offers", { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      setHireOffers(Array.isArray(data) ? data : []);
+    } catch {
+      setHireOffers([]);
     }
   }, [isAuthenticated]);
 
@@ -75,7 +89,8 @@ export default function TalentDashboard() {
     void queryClient.invalidateQueries({ queryKey: getGetTalentInvitesQueryKey() });
     void loadMyRooms();
     void loadProjectEnquiries();
-  }, [loadMyRooms, loadProjectEnquiries, queryClient, refetchInvites]);
+    void loadHireOffers();
+  }, [loadHireOffers, loadMyRooms, loadProjectEnquiries, queryClient, refetchInvites]);
 
   useEffect(() => {
     if (!isAuthenticated || user?.role !== "talent") return;
@@ -117,6 +132,10 @@ export default function TalentDashboard() {
     });
     socket.on("talent:project_enquiry", () => {
       toast.success("New project enquiry received");
+      refreshTalentInbox();
+    });
+    socket.on("talent:hire_offer", () => {
+      toast.success("New hire offer received");
       refreshTalentInbox();
     });
     socket.on("talent:hired", refreshTalentInbox);
@@ -162,6 +181,7 @@ export default function TalentDashboard() {
   const credList = Array.isArray(credentials) ? credentials : [];
   const inviteList = Array.isArray(invites) ? invites : [];
   const pendingEnquiries = projectEnquiries.filter((enquiry) => enquiry.responseStatus === "pending").length;
+  const pendingOffers = hireOffers.filter((offer) => ["sent", "changes_requested"].includes(offer.status)).length;
   const overallRep =
     credList.length > 0
       ? Math.round(credList.reduce((s: number, c: any) => s + (c.reputationScore ?? 0), 0) / credList.length)
@@ -219,6 +239,30 @@ export default function TalentDashboard() {
     }
   };
 
+  const respondHireOffer = async (offerId: string, status: "accepted" | "declined" | "changes_requested") => {
+    const message = status === "changes_requested"
+      ? window.prompt("What changes do you want to request?")?.trim()
+      : undefined;
+    if (status === "changes_requested" && !message) return;
+    setRespondingOfferId(offerId);
+    try {
+      const token = localStorage.getItem("dehix_token");
+      const res = await fetch(`/api/talent/offers/${offerId}/respond`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status, message }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to respond to offer");
+      toast.success(status === "accepted" ? "Offer accepted. Agreement is ready to sign." : "Offer response saved");
+      refreshTalentInbox();
+    } catch (e: any) {
+      toast.error(e.message ?? "Failed to respond to offer");
+    } finally {
+      setRespondingOfferId(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="sticky top-0 z-10 border-b border-border/40 bg-background/80 backdrop-blur-sm">
@@ -229,9 +273,9 @@ export default function TalentDashboard() {
             </div>
             <span className="font-medium text-sm">{user?.name}</span>
             <span className="text-xs text-muted-foreground border border-border/50 rounded px-1.5 py-0.5">Talent</span>
-            {inviteList.length + pendingEnquiries > 0 && (
+            {inviteList.length + pendingEnquiries + pendingOffers > 0 && (
               <span className="text-[10px] font-bold bg-rose-600 text-white rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 leading-none">
-                {inviteList.length + pendingEnquiries}
+                {inviteList.length + pendingEnquiries + pendingOffers}
               </span>
             )}
           </div>
@@ -312,8 +356,8 @@ export default function TalentDashboard() {
 
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-8">
-          <div className={`rounded-xl border p-4 text-center ${inviteList.length + pendingEnquiries > 0 ? "border-rose-500/20 bg-rose-500/10" : "border-border/40 bg-card"}`}>
-            <div className={`text-2xl font-bold font-mono ${inviteList.length + pendingEnquiries > 0 ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{inviteList.length + pendingEnquiries}</div>
+          <div className={`rounded-xl border p-4 text-center ${inviteList.length + pendingEnquiries + pendingOffers > 0 ? "border-rose-500/20 bg-rose-500/10" : "border-border/40 bg-card"}`}>
+            <div className={`text-2xl font-bold font-mono ${inviteList.length + pendingEnquiries + pendingOffers > 0 ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{inviteList.length + pendingEnquiries + pendingOffers}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Pending asks</div>
           </div>
           <div className="rounded-xl border border-border/40 bg-card p-4 text-center">
@@ -348,6 +392,90 @@ export default function TalentDashboard() {
             Join by Code
           </Button>
         </div>
+
+        {/* Hire Offers */}
+        {hireOffers.length > 0 && (
+          <section className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold">Hire Offers</h2>
+              <span className="text-xs text-muted-foreground">{pendingOffers} awaiting response</span>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              {hireOffers.map((offer: any) => (
+                <div key={offer._id} className="rounded-xl border border-border/50 bg-card p-4">
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold text-sm leading-tight truncate">{offer.room?.title ?? "Hire offer"}</h3>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <span className="text-xs text-primary font-medium">{offer.role?.roleTitle ?? "Project role"}</span>
+                        {offer.amountUsd ? (
+                          <span className="text-[10px] border border-green-500/20 bg-green-500/10 text-green-600 dark:text-green-400 rounded-full px-1.5 py-0.5">
+                            ${offer.amountUsd.toLocaleString()}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <span className={`text-[10px] rounded-full px-2 py-0.5 border capitalize shrink-0 ${
+                      offer.status === "accepted" || offer.status === "contracted"
+                        ? "border-green-500/20 bg-green-500/10 text-green-600 dark:text-green-400"
+                        : offer.status === "declined" || offer.status === "withdrawn"
+                          ? "border-rose-500/20 bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                          : "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                    }`}>
+                      {String(offer.status).replace(/_/g, " ")}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed border-l border-border/50 pl-3 mb-3">
+                    {offer.scopeSummary}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground mb-3">
+                    <div className="rounded-md bg-muted/50 px-2 py-1">Rate: {offer.rateType}{offer.rateAmountUsd ? ` · $${offer.rateAmountUsd}` : ""}</div>
+                    <div className="rounded-md bg-muted/50 px-2 py-1">Milestones: {offer.milestonePlan?.length ?? 0}</div>
+                    {offer.startDate && <div className="rounded-md bg-muted/50 px-2 py-1">Start: {new Date(offer.startDate).toLocaleDateString()}</div>}
+                    {offer.expectedEndDate && <div className="rounded-md bg-muted/50 px-2 py-1">End: {new Date(offer.expectedEndDate).toLocaleDateString()}</div>}
+                  </div>
+                  {offer.responseMessage && (
+                    <p className="text-xs text-muted-foreground leading-relaxed mb-3">{offer.responseMessage}</p>
+                  )}
+                  {["sent", "changes_requested"].includes(offer.status) ? (
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => respondHireOffer(offer._id, "accepted")}
+                        disabled={respondingOfferId === offer._id}
+                      >
+                        Accept
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => respondHireOffer(offer._id, "changes_requested")}
+                        disabled={respondingOfferId === offer._id}
+                      >
+                        Request Changes
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => respondHireOffer(offer._id, "declined")}
+                        disabled={respondingOfferId === offer._id}
+                      >
+                        Decline
+                      </Button>
+                    </div>
+                  ) : offer.roomId ? (
+                    <button
+                      onClick={() => navigate(`/room/${offer.roomId}`)}
+                      className="text-[11px] text-primary hover:underline"
+                    >
+                      Enter room
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Project Enquiries */}
         {projectEnquiries.length > 0 && (

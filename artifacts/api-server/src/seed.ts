@@ -8,6 +8,7 @@ import { FreelancerMatch } from "./models/FreelancerMatch.js";
 import { ProjectShortlist } from "./models/ProjectShortlist.js";
 import { ProjectEnquiry } from "./models/ProjectEnquiry.js";
 import { ProjectEnquiryRecipient } from "./models/ProjectEnquiryRecipient.js";
+import { HireOffer } from "./models/HireOffer.js";
 import { Notification } from "./models/Notification.js";
 import { RoomChannel } from "./models/RoomChannel.js";
 import { RoomMessage } from "./models/RoomMessage.js";
@@ -539,6 +540,7 @@ async function seed() {
     ProjectShortlist.deleteMany({}),
     ProjectEnquiry.deleteMany({}),
     ProjectEnquiryRecipient.deleteMany({}),
+    HireOffer.deleteMany({}),
     Notification.deleteMany({}),
     RoomChannel.deleteMany({}),
     RoomMessage.deleteMany({}),

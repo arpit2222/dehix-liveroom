@@ -76,6 +76,30 @@ type PermissionTalent = {
   }>;
 };
 
+type HireOffer = {
+  _id: string;
+  roomId: string;
+  freelancerId: string;
+  freelancer?: { _id: string; name: string; email?: string | null } | null;
+  roleId: string;
+  role?: { _id: string; roleTitle: string; skillDomain?: string; status?: string } | null;
+  interviewChannelId: string;
+  status: "draft" | "sent" | "accepted" | "declined" | "changes_requested" | "withdrawn" | "expired" | "contracted";
+  amountUsd?: number | null;
+  rateType: "fixed" | "hourly" | "weekly" | "monthly";
+  rateAmountUsd?: number | null;
+  startDate?: string | null;
+  expectedEndDate?: string | null;
+  scopeSummary: string;
+  terms: string;
+  milestonePlan?: Array<{ title: string; description?: string; amountUsd?: number; dueDate?: string | null }>;
+  responseMessage?: string | null;
+  sentAt?: string | null;
+  respondedAt?: string | null;
+  contractedAt?: string | null;
+  createdAt?: string | null;
+};
+
 type WorkspacePayload = {
   room: any;
   roles: any[];
@@ -83,6 +107,7 @@ type WorkspacePayload = {
   tickets: any[];
   milestones: any[];
   nda: any | null;
+  offers: HireOffer[];
   channels: Channel[];
   documents: WorkspaceDocument[];
   permissionMatrix: PermissionTalent[];
@@ -210,6 +235,19 @@ export default function LiveRoomPage() {
   const [interviewSaving, setInterviewSaving] = useState(false);
   const [showMeetLinkForm, setShowMeetLinkForm] = useState(false);
   const [meetLinkDraft, setMeetLinkDraft] = useState("");
+  const [showOfferForm, setShowOfferForm] = useState(false);
+  const [offerCandidateId, setOfferCandidateId] = useState("");
+  const [offerSubmitting, setOfferSubmitting] = useState(false);
+  const [offerDraft, setOfferDraft] = useState({
+    amountUsd: "",
+    rateType: "fixed",
+    rateAmountUsd: "",
+    startDate: "",
+    expectedEndDate: "",
+    scopeSummary: "",
+    terms: "",
+    milestonePlanText: "",
+  });
   const socketRef = useRef<Socket | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -289,7 +327,6 @@ export default function LiveRoomPage() {
     return [
       { command: "/interview @", label: "Create interview channel" },
       ...(selectedChannel?.type === "interview" ? [{ command: "/meet", label: "Share interview Meet" }] : []),
-      { command: "/hire @", label: "Mark talent hired" },
       { command: "/remove @", label: "Remove talent" },
       { command: "/help", label: "Show commands" },
     ];
@@ -318,6 +355,15 @@ export default function LiveRoomPage() {
       return ids.has(String(person?._id ?? participant.talentId ?? participant.userId));
     });
   }, [selectedChannel, talentParticipants]);
+
+  const offerCandidate = useMemo(() => {
+    return selectedChannelParticipants.find((participant: any) => {
+      const person = participant.user ?? participant.userId;
+      return String(person?._id ?? participant.talentId ?? participant.userId) === offerCandidateId;
+    }) ?? selectedChannelParticipants[0] ?? null;
+  }, [offerCandidateId, selectedChannelParticipants]);
+
+  const roomOffers = workspace?.offers ?? [];
 
   useEffect(() => {
     if (workspace?.documents.length && expandedDocType === null) {
@@ -394,6 +440,8 @@ export default function LiveRoomPage() {
     setInterviewNotesDraft(selectedChannel?.interviewNotes ?? "");
     setShowMeetLinkForm(false);
     setMeetLinkDraft("");
+    setShowOfferForm(false);
+    setOfferCandidateId("");
   }, [selectedChannelId, selectedChannel?.interviewNotes]);
 
   useEffect(() => {
@@ -416,8 +464,16 @@ export default function LiveRoomPage() {
     socket.on("room:participant_removed", () => void loadWorkspace(selectedChannelId, true));
     socket.on("room:document_permission_updated", () => void loadWorkspace(selectedChannelId, true));
     socket.on("room:status_changed", () => void loadWorkspace(selectedChannelId, true));
+    socket.on("room:nda_signed", () => void loadWorkspace(selectedChannelId, true));
+    socket.on("room:milestone_updated", () => void loadWorkspace(selectedChannelId, true));
+    socket.on("room:milestone_released", () => void loadWorkspace(selectedChannelId, true));
     socket.on("room:interview_created", () => void loadWorkspace(selectedChannelId, true));
     socket.on("room:interview_updated", () => void loadWorkspace(selectedChannelId, true));
+    socket.on("room:hire_offer_sent", () => void loadWorkspace(selectedChannelId, true));
+    socket.on("room:hire_offer_accepted", () => void loadWorkspace(selectedChannelId, true));
+    socket.on("room:hire_offer_declined", () => void loadWorkspace(selectedChannelId, true));
+    socket.on("room:hire_offer_changes_requested", () => void loadWorkspace(selectedChannelId, true));
+    socket.on("room:hire_offer_contracted", () => void loadWorkspace(selectedChannelId, true));
     socket.on("room:command_executed", () => void loadWorkspace(selectedChannelId, true));
     socket.on("room:deleted", () => {
       toast.info("This room was deleted");
@@ -564,6 +620,106 @@ export default function LiveRoomPage() {
       toast.error(err.message ?? "Failed to update interview");
     } finally {
       setInterviewSaving(false);
+    }
+  };
+
+  const participantRole = (participant: any) => {
+    return workspace?.roles.find((role) => String(role._id) === String(participant?.roleId ?? selectedChannel?.roleId)) ?? null;
+  };
+
+  const canSendOfferToParticipant = (participant: any) => {
+    if (!selectedChannel || selectedChannel.type !== "interview" || selectedChannel.interviewStatus !== "completed") return false;
+    return selectedChannelParticipants.some((item: any) => String(item._id) === String(participant._id));
+  };
+
+  const openOfferForm = (participant?: any) => {
+    if (!selectedChannel || selectedChannel.type !== "interview") {
+      toast.error("Select an interview channel first");
+      return;
+    }
+    if (selectedChannel.interviewStatus !== "completed") {
+      toast.error("Mark the interview complete before sending an offer");
+      return;
+    }
+    const target = participant ?? selectedChannelParticipants[0];
+    if (!target) {
+      toast.error("No interview participant selected");
+      return;
+    }
+    const person = target.user ?? target.userId;
+    const role = participantRole(target);
+    setOfferCandidateId(String(person?._id ?? target.talentId ?? target.userId));
+    setOfferDraft({
+      amountUsd: "",
+      rateType: "fixed",
+      rateAmountUsd: "",
+      startDate: "",
+      expectedEndDate: "",
+      scopeSummary: `Offer for ${role?.roleTitle ?? "project role"} in ${room?.title ?? "this Live Room"}.`,
+      terms: "Milestone releases are simulated in DEHIX until a real payment gateway is connected. Final IP transfers after accepted milestone release.",
+      milestonePlanText: "",
+    });
+    setShowOfferForm(true);
+  };
+
+  const parseMilestonePlanText = () => {
+    return offerDraft.milestonePlanText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [title, amount, dueDate, ...descriptionParts] = line.split("|").map((part) => part.trim());
+        return {
+          title,
+          amountUsd: amount ? Number(amount.replace(/[^0-9.]/g, "")) || undefined : undefined,
+          dueDate: dueDate || undefined,
+          description: descriptionParts.join(" | ") || undefined,
+        };
+      })
+      .filter((milestone) => milestone.title);
+  };
+
+  const sendHireOffer = async () => {
+    if (!selectedChannel || selectedChannel.type !== "interview" || !offerCandidate || offerSubmitting) return;
+    const person = offerCandidate.user ?? offerCandidate.userId;
+    const freelancerId = String(person?._id ?? offerCandidate.talentId ?? offerCandidate.userId);
+    const role = participantRole(offerCandidate);
+    if (!role?._id) {
+      toast.error("Selected talent does not have a role in this room");
+      return;
+    }
+    if (!offerDraft.scopeSummary.trim() || !offerDraft.terms.trim()) {
+      toast.error("Scope summary and terms are required");
+      return;
+    }
+    setOfferSubmitting(true);
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/offers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({
+          freelancerId,
+          roleId: role._id,
+          interviewChannelId: selectedChannel._id,
+          amountUsd: offerDraft.amountUsd ? Number(offerDraft.amountUsd) : undefined,
+          rateType: offerDraft.rateType,
+          rateAmountUsd: offerDraft.rateAmountUsd ? Number(offerDraft.rateAmountUsd) : undefined,
+          startDate: offerDraft.startDate || undefined,
+          expectedEndDate: offerDraft.expectedEndDate || undefined,
+          scopeSummary: offerDraft.scopeSummary,
+          terms: offerDraft.terms,
+          milestonePlan: parseMilestonePlanText(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to send offer");
+      toast.success("Hire offer sent");
+      setShowOfferForm(false);
+      await loadWorkspace(selectedChannel._id, true);
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to send offer");
+    } finally {
+      setOfferSubmitting(false);
     }
   };
 
@@ -1287,6 +1443,14 @@ export default function LiveRoomPage() {
                         <Button size="sm" variant="outline" onClick={() => void updateInterview({ status: "completed" })} disabled={interviewSaving} className="h-8 text-xs">
                           Mark Complete
                         </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => openOfferForm()}
+                          disabled={selectedChannel.interviewStatus !== "completed" || selectedChannelParticipants.length === 0}
+                          className="h-8 text-xs"
+                        >
+                          <Briefcase className="h-3.5 w-3.5 mr-1" /> Send Offer
+                        </Button>
                       </>
                     )}
                   </div>
@@ -1370,6 +1534,128 @@ export default function LiveRoomPage() {
                   >
                     Save
                   </Button>
+                </div>
+              </div>
+            )}
+
+            {selectedChannel?.type === "interview" && showOfferForm && isOwner && (
+              <div className="shrink-0 border-b border-border/40 bg-card/40 px-5 py-4">
+                <div className="grid gap-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-bold text-foreground">Send hire offer</div>
+                      <div className="text-[11px] text-muted-foreground">Offer becomes active only after freelancer accepts and both parties sign.</div>
+                    </div>
+                    <Button size="sm" variant="ghost" onClick={() => setShowOfferForm(false)} className="h-8 px-2">
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <label className="space-y-1 text-xs">
+                      <span className="font-semibold text-muted-foreground">Freelancer</span>
+                      <select
+                        value={offerCandidateId}
+                        onChange={(event) => setOfferCandidateId(event.target.value)}
+                        className="h-9 w-full rounded-md border border-border/45 bg-background/70 px-2 text-xs outline-none focus:border-primary/40"
+                      >
+                        {selectedChannelParticipants.map((participant: any) => {
+                          const person = participant.user ?? participant.userId;
+                          const value = String(person?._id ?? participant.talentId ?? participant.userId);
+                          return <option key={participant._id} value={value}>{person?.name ?? participant.name ?? "Talent"}</option>;
+                        })}
+                      </select>
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="font-semibold text-muted-foreground">Total amount</span>
+                      <input
+                        value={offerDraft.amountUsd}
+                        onChange={(event) => setOfferDraft((prev) => ({ ...prev, amountUsd: event.target.value }))}
+                        placeholder="5000"
+                        inputMode="decimal"
+                        className="h-9 w-full rounded-md border border-border/45 bg-background/70 px-2 text-xs outline-none focus:border-primary/40"
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="font-semibold text-muted-foreground">Rate type</span>
+                      <select
+                        value={offerDraft.rateType}
+                        onChange={(event) => setOfferDraft((prev) => ({ ...prev, rateType: event.target.value }))}
+                        className="h-9 w-full rounded-md border border-border/45 bg-background/70 px-2 text-xs outline-none focus:border-primary/40"
+                      >
+                        <option value="fixed">Fixed</option>
+                        <option value="hourly">Hourly</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <label className="space-y-1 text-xs">
+                      <span className="font-semibold text-muted-foreground">Rate amount</span>
+                      <input
+                        value={offerDraft.rateAmountUsd}
+                        onChange={(event) => setOfferDraft((prev) => ({ ...prev, rateAmountUsd: event.target.value }))}
+                        placeholder="Optional"
+                        inputMode="decimal"
+                        className="h-9 w-full rounded-md border border-border/45 bg-background/70 px-2 text-xs outline-none focus:border-primary/40"
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="font-semibold text-muted-foreground">Start date</span>
+                      <input
+                        type="date"
+                        value={offerDraft.startDate}
+                        onChange={(event) => setOfferDraft((prev) => ({ ...prev, startDate: event.target.value }))}
+                        className="h-9 w-full rounded-md border border-border/45 bg-background/70 px-2 text-xs outline-none focus:border-primary/40"
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="font-semibold text-muted-foreground">Expected end</span>
+                      <input
+                        type="date"
+                        value={offerDraft.expectedEndDate}
+                        onChange={(event) => setOfferDraft((prev) => ({ ...prev, expectedEndDate: event.target.value }))}
+                        className="h-9 w-full rounded-md border border-border/45 bg-background/70 px-2 text-xs outline-none focus:border-primary/40"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="space-y-1 text-xs">
+                    <span className="font-semibold text-muted-foreground">Scope summary</span>
+                    <textarea
+                      rows={3}
+                      value={offerDraft.scopeSummary}
+                      onChange={(event) => setOfferDraft((prev) => ({ ...prev, scopeSummary: event.target.value }))}
+                      className="w-full resize-none rounded-md border border-border/45 bg-background/70 px-3 py-2 text-xs outline-none focus:border-primary/40"
+                    />
+                  </label>
+                  <label className="space-y-1 text-xs">
+                    <span className="font-semibold text-muted-foreground">Terms</span>
+                    <textarea
+                      rows={3}
+                      value={offerDraft.terms}
+                      onChange={(event) => setOfferDraft((prev) => ({ ...prev, terms: event.target.value }))}
+                      className="w-full resize-none rounded-md border border-border/45 bg-background/70 px-3 py-2 text-xs outline-none focus:border-primary/40"
+                    />
+                  </label>
+                  <label className="space-y-1 text-xs">
+                    <span className="font-semibold text-muted-foreground">Milestone plan</span>
+                    <textarea
+                      rows={3}
+                      value={offerDraft.milestonePlanText}
+                      onChange={(event) => setOfferDraft((prev) => ({ ...prev, milestonePlanText: event.target.value }))}
+                      placeholder="One per line: Title | Amount | YYYY-MM-DD | Description"
+                      className="w-full resize-none rounded-md border border-border/45 bg-background/70 px-3 py-2 text-xs outline-none focus:border-primary/40"
+                    />
+                  </label>
+                  <div className="flex justify-end gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setShowOfferForm(false)} disabled={offerSubmitting}>Cancel</Button>
+                    <Button size="sm" onClick={() => void sendHireOffer()} disabled={offerSubmitting}>
+                      {offerSubmitting ? "Sending..." : "Send Offer"}
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1639,11 +1925,12 @@ export default function LiveRoomPage() {
                                   Interview
                                 </button>
                                 <button
-                                  onClick={() => runParticipantCommand("hire", participant)}
-                                  className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-1.5 py-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 cursor-pointer text-center"
-                                  title="Mark hired"
+                                  onClick={() => openOfferForm(participant)}
+                                  disabled={!canSendOfferToParticipant(participant)}
+                                  className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-1.5 py-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40 cursor-pointer text-center"
+                                  title="Send offer after completed interview"
                                 >
-                                  Hire
+                                  Offer
                                 </button>
                                 <button
                                   onClick={() => runParticipantCommand("remove", participant)}
@@ -1699,11 +1986,12 @@ export default function LiveRoomPage() {
                                   Interview
                                 </button>
                                 <button
-                                  onClick={() => runParticipantCommand("hire", participant)}
-                                  className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-1.5 py-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 cursor-pointer text-center"
-                                  title="Mark hired"
+                                  onClick={() => openOfferForm(participant)}
+                                  disabled={!canSendOfferToParticipant(participant)}
+                                  className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-1.5 py-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40 cursor-pointer text-center"
+                                  title="Send offer after completed interview"
                                 >
-                                  Hire
+                                  Offer
                                 </button>
                                 <button
                                   onClick={() => runParticipantCommand("remove", participant)}
@@ -1718,6 +2006,64 @@ export default function LiveRoomPage() {
                         );
                       })
                   )}
+                </div>
+              </section>
+
+              {/* Hiring Flow Section */}
+              <section className="space-y-3">
+                <PanelHeader icon={<Briefcase className="h-3.5 w-3.5 text-primary/80" />} label="Hiring Flow" count={roomOffers.length} />
+                <div className="space-y-2">
+                  {roomOffers.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-border/40 p-3 text-xs text-muted-foreground">
+                      Complete an interview to send a formal offer.
+                    </p>
+                  ) : (
+                    roomOffers.slice(0, 5).map((offer) => (
+                      <div key={offer._id} className="rounded-xl border border-border/40 bg-background/45 p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-bold text-foreground">{offer.freelancer?.name ?? "Freelancer"}</div>
+                            <div className="truncate text-[10px] text-muted-foreground">{offer.role?.roleTitle ?? "Project role"}</div>
+                          </div>
+                          <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold capitalize ${
+                            offer.status === "accepted" || offer.status === "contracted"
+                              ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                              : offer.status === "declined" || offer.status === "withdrawn"
+                                ? "border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                                : "border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                          }`}>
+                            {offer.status.replace(/_/g, " ")}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
+                          {offer.amountUsd ? <span className="rounded bg-muted px-1.5 py-0.5 font-mono">${offer.amountUsd.toLocaleString()}</span> : null}
+                          <span className="rounded bg-muted px-1.5 py-0.5">{offer.rateType}</span>
+                          {offer.sentAt ? <span>{new Date(offer.sentAt).toLocaleDateString()}</span> : null}
+                        </div>
+                        {offer.responseMessage && (
+                          <p className="mt-2 line-clamp-2 text-[10px] text-muted-foreground">{offer.responseMessage}</p>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="rounded-xl border border-border/40 bg-background/45 p-3">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-bold text-foreground">Agreement</span>
+                    <span className="text-[10px] font-bold capitalize text-muted-foreground">{workspace.nda?.status?.replace(/_/g, " ") ?? "not generated"}</span>
+                  </div>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    {workspace.nda ? `${workspace.nda.signedBy?.length ?? 0}/2 signatures recorded` : "Accepted offer will prepare the agreement."}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-border/40 bg-background/45 p-3">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-bold text-foreground">Escrow Simulation</span>
+                    <span className="font-mono text-[10px] text-emerald-600 dark:text-emerald-400">
+                      ${workspace.milestones.filter((m: any) => m.status === "released").reduce((sum: number, m: any) => sum + (m.amountUsd ?? 0), 0).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[10px] text-muted-foreground">{workspace.milestones.length} milestone{workspace.milestones.length !== 1 ? "s" : ""}</div>
                 </div>
               </section>
 

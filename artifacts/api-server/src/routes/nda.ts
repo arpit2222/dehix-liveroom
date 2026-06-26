@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Nda } from "../models/Nda.js";
 import { LiveRoom } from "../models/LiveRoom.js";
+import { HireOffer } from "../models/HireOffer.js";
 import { RoomActivity } from "../models/RoomActivity.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { requireRoomAccess } from "../lib/roomAccess.js";
@@ -42,7 +43,12 @@ router.post("/sign", async (req: AuthRequest, res) => {
         room.contractedAt = new Date();
         await room.save();
       }
+      await HireOffer.updateMany(
+        { roomId: req.params["id"], status: "accepted" },
+        { status: "contracted", contractedAt: new Date() }
+      );
       RoomActivity.create({ roomId: String(req.params["id"]), type: "nda_signed", actorId: userId, meta: { fullyExecuted: true } }).catch(() => {});
+      RoomActivity.create({ roomId: String(req.params["id"]), type: "hire_offer_contracted", actorId: userId }).catch(() => {});
     } else {
       nda.status = "pending_signatures";
       RoomActivity.create({ roomId: String(req.params["id"]), type: "nda_signed", actorId: userId, meta: { fullyExecuted: false } }).catch(() => {});
@@ -55,6 +61,10 @@ router.post("/sign", async (req: AuthRequest, res) => {
         signedBy: nda.signedBy,
         status: nda.status,
       });
+      if (nda.status === "signed") {
+        io.to(`room:${req.params["id"]}`).emit("room:hire_offer_contracted", { roomId: req.params["id"] });
+        io.to(`room:${req.params["id"]}`).emit("room:status_changed", { roomId: req.params["id"], status: "contracted" });
+      }
     }
     res.json(formatNda(nda));
   } catch (err) {

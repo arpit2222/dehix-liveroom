@@ -3,7 +3,7 @@ import { DehixSyncSchema, type DehixSyncMetadata, asDehixId, ensureDehixSync } f
 
 export interface INotification extends Document {
   userId: Types.ObjectId;
-  type: "project_enquiry" | "room_invite" | "system";
+  type: "project_enquiry" | "room_invite" | "hire_offer" | "system";
   title: string;
   message: string;
   roomId?: Types.ObjectId;
@@ -17,7 +17,7 @@ export interface INotification extends Document {
 const NotificationSchema = new Schema<INotification>(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
-    type: { type: String, enum: ["project_enquiry", "room_invite", "system"], required: true },
+    type: { type: String, enum: ["project_enquiry", "room_invite", "hire_offer", "system"], required: true },
     title: { type: String, required: true },
     message: { type: String, required: true },
     roomId: { type: Schema.Types.ObjectId, ref: "LiveRoom" },

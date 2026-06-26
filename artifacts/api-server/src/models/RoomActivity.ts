@@ -19,6 +19,12 @@ export type ActivityType =
   | "freelancer_shortlisted"
   | "freelancer_enquiry_sent"
   | "freelancer_enquiry_responded"
+  | "hire_offer_sent"
+  | "hire_offer_accepted"
+  | "hire_offer_declined"
+  | "hire_offer_changes_requested"
+  | "hire_offer_withdrawn"
+  | "hire_offer_contracted"
   | "freelancer_hired"
   | "room_contracted"
   | "room_closed";
