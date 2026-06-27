@@ -65,6 +65,10 @@ import {
 
 const router = Router();
 
+function createdAtMs(value: { createdAt?: Date | string | number }): number {
+  return new Date(value.createdAt ?? 0).getTime();
+}
+
 function normalizeGoogleMeetLink(value: unknown): string | null {
   const raw = typeof value === "string" ? value.trim() : "";
   if (!raw) return null;
@@ -517,15 +521,16 @@ router.get("/my", requireAuth, async (req: AuthRequest, res) => {
   try {
     let rooms;
     if (req.userRole === "business") {
-      rooms = await LiveRoom.find({ businessId: req.userId }).sort({ createdAt: -1 });
+      rooms = await LiveRoom.find({ businessId: req.userId });
     } else {
       const participations = await RoomParticipant.find({
         userId: req.userId,
         status: { $in: ["joined", "accepted"] },
       }).select("roomId");
       const roomIds = participations.map((p) => p.roomId);
-      rooms = await LiveRoom.find({ _id: { $in: roomIds } }).sort({ createdAt: -1 });
+      rooms = await LiveRoom.find({ _id: { $in: roomIds } });
     }
+    rooms.sort((a, b) => createdAtMs(b) - createdAtMs(a));
     const roomIds = rooms.map((r) => r._id);
     const [participantCounts, ticketCounts, milestoneCounts] = await Promise.all([
       RoomParticipant.aggregate([
@@ -747,8 +752,9 @@ router.get("/:id/workspace", requireAuth, requireRoomAccess, async (req: AuthReq
         isRoomOwner(room, req.userId)
           ? { roomId: room._id }
           : { roomId: room._id, freelancerId: req.userId }
-      ).sort({ createdAt: -1 }),
+      ),
     ]);
+    offers.sort((a, b) => createdAtMs(b) - createdAtMs(a));
     const currentParticipant = await RoomParticipant.findOne({
       roomId: room._id,
       userId: req.userId,
@@ -794,10 +800,10 @@ router.get("/:id/channels/:channelId/messages", requireAuth, requireRoomAccess, 
       return;
     }
     const limit = Math.max(20, Math.min(200, Number(req.query["limit"] ?? 120)));
-    const messages = await RoomMessage.find({ roomId: room._id, channelId: channel._id })
-      .sort({ createdAt: -1 })
-      .limit(limit);
-    res.json(messages.reverse().map(formatRoomMessage));
+    const messages = await RoomMessage.find({ roomId: room._id, channelId: channel._id });
+    messages.sort((a, b) => createdAtMs(b) - createdAtMs(a));
+    const limitedMessages = messages.slice(0, limit);
+    res.json(limitedMessages.reverse().map(formatRoomMessage));
   } catch (err) {
     req.log.error({ err }, "getChannelMessages error");
     res.status(500).json({ error: "Failed to load messages" });

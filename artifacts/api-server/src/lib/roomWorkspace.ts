@@ -14,6 +14,10 @@ type ParticipantDoc = InstanceType<typeof RoomParticipant>;
 type ChannelDoc = InstanceType<typeof RoomChannel>;
 type MessageDoc = InstanceType<typeof RoomMessage>;
 
+function createdAtMs(value: { createdAt?: Date | string | number }): number {
+  return new Date(value.createdAt ?? 0).getTime();
+}
+
 export const ROOM_MEMBER_STATUSES = ["joined", "accepted"] as const;
 export const ROOM_INTERVIEW_ELIGIBLE_STATUSES = ["invited", "joined", "accepted"] as const;
 
@@ -161,7 +165,8 @@ export async function userCanAccessChannel(room: RoomDoc, channel: ChannelDoc, u
 
 export async function getVisibleChannels(room: RoomDoc, userId: string): Promise<ChannelDoc[]> {
   await ensureWorkspaceChannels(room);
-  const channels = await RoomChannel.find({ roomId: room._id }).sort({ type: 1, createdAt: 1 });
+  const channels = await RoomChannel.find({ roomId: room._id });
+  channels.sort((a, b) => String(a.type).localeCompare(String(b.type)) || createdAtMs(a) - createdAtMs(b));
   if (isRoomOwner(room, userId)) return channels;
   const participant = await getActiveParticipant(room._id, userId);
   if (!participant) return [];
@@ -185,9 +190,10 @@ export async function userCanViewRoomDocument(room: RoomDoc, userId: string | un
 export async function getRoomDocumentCatalog(room: RoomDoc, userId: string) {
   const isOwner = isRoomOwner(room, userId);
   const [generatedDocs, permissions] = await Promise.all([
-    GeneratedDoc.find({ roomId: room._id }).sort({ createdAt: -1 }),
+    GeneratedDoc.find({ roomId: room._id }),
     RoomDocumentPermission.find({ roomId: room._id }),
   ]);
+  generatedDocs.sort((a, b) => createdAtMs(b) - createdAtMs(a));
   const allowedDocTypes = new Set(
     permissions
       .filter((permission) => String(permission.talentId) === userId && permission.canView)
