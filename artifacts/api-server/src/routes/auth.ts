@@ -20,13 +20,25 @@ function safeUser(user: InstanceType<typeof User>) {
   };
 }
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function normalizeEmailBody(body: unknown): unknown {
+  if (!body || typeof body !== "object") return body;
+  const record = body as Record<string, unknown>;
+  if (typeof record["email"] !== "string") return body;
+  return { ...record, email: normalizeEmail(record["email"]) };
+}
+
 router.post("/register", async (req, res) => {
-  const parsed = RegisterBody.safeParse(req.body);
+  const parsed = RegisterBody.safeParse(normalizeEmailBody(req.body));
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input" });
     return;
   }
-  const { email, password, name, role, walletAddress } = parsed.data;
+  const { password, name, role, walletAddress } = parsed.data;
+  const email = normalizeEmail(parsed.data.email);
   try {
     const existing = await User.findOne({ email });
     if (existing) {
@@ -44,12 +56,13 @@ router.post("/register", async (req, res) => {
 });
 
 router.post("/login", async (req, res) => {
-  const parsed = LoginBody.safeParse(req.body);
+  const parsed = LoginBody.safeParse(normalizeEmailBody(req.body));
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input" });
     return;
   }
-  const { email, password } = parsed.data;
+  const { password } = parsed.data;
+  const email = normalizeEmail(parsed.data.email);
   try {
     const user = await User.findOne({ email });
     if (!user) {
