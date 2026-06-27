@@ -18,8 +18,10 @@ import {
   Hash,
   Lock,
   MessageSquare,
+  Plus,
   RefreshCw,
   Send,
+  Settings,
   Shield,
   Sparkles,
   User,
@@ -30,7 +32,7 @@ import {
 
 type Channel = {
   _id: string;
-  type: "general" | "direct" | "interview";
+  type: "general" | "direct" | "interview" | "custom" | "ai";
   name: string;
   displayName: string;
   participantIds: string[];
@@ -257,6 +259,11 @@ export default function LiveRoomPage() {
   const [lastSentText, setLastSentText] = useState("");
   const [accessSearch, setAccessSearch] = useState("");
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
+  const [showChannelForm, setShowChannelForm] = useState(false);
+  const [editingCustomChannel, setEditingCustomChannel] = useState<Channel | null>(null);
+  const [customChannelName, setCustomChannelName] = useState("");
+  const [customChannelParticipantIds, setCustomChannelParticipantIds] = useState<string[]>([]);
+  const [channelSaving, setChannelSaving] = useState(false);
 
   const selectedChannel = useMemo(
     () => workspace?.channels.find((channel) => channel._id === selectedChannelId) ?? null,
@@ -269,29 +276,12 @@ export default function LiveRoomPage() {
   const sortedChannels = useMemo(() => {
     if (!workspace?.channels) return [];
     return [...workspace.channels].sort((a, b) => {
-      // 1. Group check: non-direct (general/ai-agent/interview) channels come before direct messages
-      const aIsGeneral = a.type !== "direct";
-      const bIsGeneral = b.type !== "direct";
-      if (aIsGeneral !== bIsGeneral) {
-        return aIsGeneral ? -1 : 1;
-      }
-      
-      // 2. Sorting within their respective groups
-      if (aIsGeneral) {
-        // "general" is first
-        if (a.name === "general") return -1;
-        if (b.name === "general") return 1;
-        
-        // "ai-agent" is second
-        if (a.name === "ai-agent") return -1;
-        if (b.name === "ai-agent") return 1;
-        
-        // Others sorted alphabetically by displayName
-        return a.displayName.localeCompare(b.displayName);
-      } else {
-        // Direct messages sorted alphabetically by displayName
-        return a.displayName.localeCompare(b.displayName);
-      }
+      const order = { general: 0, ai: 1, custom: 2, interview: 3, direct: 4 } as Record<Channel["type"], number>;
+      const diff = order[a.type] - order[b.type];
+      if (diff !== 0) return diff;
+      if (a.name === "general") return -1;
+      if (b.name === "general") return 1;
+      return a.displayName.localeCompare(b.displayName);
     });
   }, [workspace?.channels]);
 
@@ -305,7 +295,11 @@ export default function LiveRoomPage() {
   }, [workspace?.permissionMatrix, accessSearch]);
 
   const regularChannels = useMemo(
-    () => sortedChannels.filter((channel) => channel.type !== "interview" && channel.type !== "direct") ?? [],
+    () => sortedChannels.filter((channel) => channel.type === "general" || channel.type === "custom") ?? [],
+    [sortedChannels]
+  );
+  const aiChannels = useMemo(
+    () => sortedChannels.filter((channel) => channel.type === "ai") ?? [],
     [sortedChannels]
   );
   const interviewChannels = useMemo(
@@ -324,10 +318,12 @@ export default function LiveRoomPage() {
 
   const commandSuggestions = useMemo(() => {
     if (!isOwner) return [{ command: "/help", label: "Show commands" }];
+    const canManageCurrentChannel = selectedChannel?.type === "interview" || selectedChannel?.type === "custom";
     return [
       { command: "/interview @", label: "Create interview channel" },
+      ...(canManageCurrentChannel ? [{ command: "/add @", label: "Add talent to channel" }] : []),
       ...(selectedChannel?.type === "interview" ? [{ command: "/meet", label: "Share interview Meet" }] : []),
-      { command: "/remove @", label: "Remove talent" },
+      ...(selectedChannel?.type === "general" || canManageCurrentChannel ? [{ command: "/remove @", label: "Remove talent" }] : []),
       { command: "/help", label: "Show commands" },
     ];
   }, [isOwner, selectedChannel?.type]);
@@ -348,7 +344,7 @@ export default function LiveRoomPage() {
     : [];
 
   const selectedChannelParticipants = useMemo(() => {
-    if (!selectedChannel || selectedChannel.type !== "interview") return [];
+    if (!selectedChannel || (selectedChannel.type !== "interview" && selectedChannel.type !== "custom")) return [];
     const ids = new Set(selectedChannel.participantIds.map(String));
     return talentParticipants.filter((participant: any) => {
       const person = participant.user ?? participant.userId;
@@ -459,6 +455,7 @@ export default function LiveRoomPage() {
       if (message.channelId === selectedChannelId) mergeMessage(message);
     });
     socket.on("room:channel_created", () => void loadWorkspace(selectedChannelId, true));
+    socket.on("room:channel_updated", () => void loadWorkspace(selectedChannelId, true));
     socket.on("room:participant_joined", () => void loadWorkspace(selectedChannelId, true));
     socket.on("room:participant_invited", () => void loadWorkspace(selectedChannelId, true));
     socket.on("room:participant_removed", () => void loadWorkspace(selectedChannelId, true));
@@ -620,6 +617,66 @@ export default function LiveRoomPage() {
       toast.error(err.message ?? "Failed to update interview");
     } finally {
       setInterviewSaving(false);
+    }
+  };
+
+  const talentIdForParticipant = (participant: any) => {
+    const person = participant.user ?? participant.userId;
+    return String(person?._id ?? participant.talentId ?? participant.userId);
+  };
+
+  const openCustomChannelForm = (channel?: Channel) => {
+    setEditingCustomChannel(channel ?? null);
+    setCustomChannelName(channel?.name ?? "");
+    const channelTalentIds = new Set((channel?.participantIds ?? []).map(String));
+    setCustomChannelParticipantIds(
+      channel
+        ? talentParticipants
+            .filter((participant: any) => channelTalentIds.has(talentIdForParticipant(participant)))
+            .map((participant: any) => String(participant._id))
+        : []
+    );
+    setShowChannelForm(true);
+  };
+
+  const toggleCustomChannelParticipant = (participantId: string) => {
+    setCustomChannelParticipantIds((current) =>
+      current.includes(participantId)
+        ? current.filter((id) => id !== participantId)
+        : [...current, participantId]
+    );
+  };
+
+  const saveCustomChannel = async () => {
+    if (!roomId || channelSaving) return;
+    const name = customChannelName.trim();
+    if (!name) {
+      toast.error("Channel name is required");
+      return;
+    }
+    setChannelSaving(true);
+    try {
+      const isEditing = Boolean(editingCustomChannel?._id);
+      const res = await fetch(
+        isEditing ? `/api/rooms/${roomId}/channels/${editingCustomChannel?._id}` : `/api/rooms/${roomId}/channels`,
+        {
+          method: isEditing ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ name, participantIds: customChannelParticipantIds }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to save channel");
+      setShowChannelForm(false);
+      setEditingCustomChannel(null);
+      setCustomChannelName("");
+      setCustomChannelParticipantIds([]);
+      await loadWorkspace(data._id ?? selectedChannelId, true);
+      toast.success(isEditing ? "Channel updated" : "Channel created");
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to save channel");
+    } finally {
+      setChannelSaving(false);
     }
   };
 
@@ -1117,7 +1174,24 @@ export default function LiveRoomPage() {
               <div className="space-y-4">
                 {/* Standard Channels Group */}
                 <div>
-                  <PanelHeader icon={<Users className="h-3.5 w-3.5" />} label="Channels" count={regularChannels.length} />
+                  <div className="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Users className="h-3.5 w-3.5" />
+                      Channels
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px]">{regularChannels.length}</span>
+                      {isOwner && (
+                        <button
+                          onClick={() => openCustomChannelForm()}
+                          className="inline-flex h-5 w-5 items-center justify-center rounded border border-border/45 bg-background/65 text-muted-foreground hover:text-foreground"
+                          title="Create custom channel"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </button>
+                      )}
+                    </span>
+                  </div>
                   <div className="space-y-1 mt-1.5">
                     {regularChannels.map((channel) => (
                       <button
@@ -1129,7 +1203,28 @@ export default function LiveRoomPage() {
                             : "text-muted-foreground hover:text-foreground hover:bg-muted/45 border border-transparent"
                         }`}
                       >
-                        {channel.name === "ai-agent" ? <Bot className="h-3.5 w-3.5 text-primary" /> : <Hash className="h-3.5 w-3.5" />}
+                        <Hash className="h-3.5 w-3.5" />
+                        <span className="truncate font-semibold">{channel.displayName}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Personal AI Group */}
+                <div>
+                  <PanelHeader icon={<Bot className="h-3.5 w-3.5 text-primary" />} label="Personal AI" count={aiChannels.length} />
+                  <div className="space-y-1 mt-1.5">
+                    {aiChannels.map((channel) => (
+                      <button
+                        key={channel._id}
+                        onClick={() => setSelectedChannelId(channel._id)}
+                        className={`w-full flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-all ${
+                          selectedChannelId === channel._id
+                            ? "bg-primary/12 text-primary border border-primary/20 shadow-sm"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/45 border border-transparent"
+                        }`}
+                      >
+                        <Bot className="h-3.5 w-3.5 text-primary" />
                         <span className="truncate font-semibold">{channel.displayName}</span>
                       </button>
                     ))}
@@ -1385,12 +1480,14 @@ export default function LiveRoomPage() {
           <main className="flex-1 min-w-0 flex flex-col bg-white dark:bg-card border border-border/40 rounded-[24px] my-3 mx-2 shadow-sm overflow-hidden">
             <header className="h-14 shrink-0 border-b border-[#F1F2F6] dark:border-border/30 px-5 flex items-center justify-between gap-3 bg-background/75">
               <div className="flex items-center gap-2 min-w-0">
-                {selectedChannel?.name === "ai-agent" ? (
+                {selectedChannel?.type === "ai" ? (
                   <Bot className="h-4 w-4 text-primary" />
                 ) : selectedChannel?.type === "general" ? (
                   <Hash className="h-4 w-4 text-muted-foreground" />
                 ) : selectedChannel?.type === "interview" ? (
                   <Calendar className="h-4 w-4 text-muted-foreground" />
+                ) : selectedChannel?.type === "custom" ? (
+                  <Hash className="h-4 w-4 text-muted-foreground" />
                 ) : (
                   <Lock className="h-4 w-4 text-muted-foreground" />
                 )}
@@ -1399,17 +1496,24 @@ export default function LiveRoomPage() {
                     <div className="text-sm font-bold truncate text-foreground">{selectedChannel?.displayName ?? "Channel"}</div>
                   </div>
                   <div className="text-[10px] text-muted-foreground truncate">
-                    {selectedChannel?.name === "ai-agent"
-                      ? "Dedicated AI Assistant. Type your queries directly; no need to use @dehixai."
+                    {selectedChannel?.type === "ai"
+                      ? "Private DEHIX AI channel. Only your permitted context is used."
                       : selectedChannel?.type === "general"
                         ? "General chat. Mention @dehixai when you want AI to participate."
                         : selectedChannel?.type === "interview"
                           ? `Interview workspace · ${selectedChannel.interviewStatus ?? "scheduled"}`
-                          : "Private business-talent conversation."}
+                          : selectedChannel?.type === "custom"
+                            ? "Custom channel. Add or remove talent any time."
+                            : "Private business-talent conversation."}
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-3 shrink-0">
+                {selectedChannel?.type === "custom" && isOwner && (
+                  <Button size="sm" variant="outline" onClick={() => openCustomChannelForm(selectedChannel)} className="h-8 text-xs">
+                    <Settings className="h-3.5 w-3.5 mr-1" /> Manage
+                  </Button>
+                )}
                 {selectedChannel?.type === "interview" ? (
                   <div className="flex items-center gap-2">
                     {isOwner && selectedChannelParticipants.slice(0, 3).map((participant: any) => {
@@ -1670,10 +1774,10 @@ export default function LiveRoomPage() {
                   </div>
                   <div className="space-y-2">
                     <div className="text-base font-bold text-foreground">
-                      {selectedChannel?.name === "ai-agent" ? "Welcome to your AI Agent Chat" : "Welcome to the Workspace Chat"}
+                      {selectedChannel?.type === "ai" ? "Welcome to your personal DEHIX AI" : "Welcome to the Workspace Chat"}
                     </div>
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      {selectedChannel?.name === "ai-agent"
+                      {selectedChannel?.type === "ai"
                         ? "Ask anything about the project validation, blueprints, features, roadmap, and technologies. The AI will assist you instantly."
                         : "Start a conversation with your team or call @dehixai for permission-aware AI assistance with project tasks, contracts, or milestones."}
                     </p>
@@ -1682,9 +1786,9 @@ export default function LiveRoomPage() {
                     <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest text-left px-1">Suggested Prompt Actions</div>
                     <div className="flex flex-wrap gap-2 justify-start">
                       {[
-                        { label: "Analyze project scope", text: selectedChannel?.name === "ai-agent" ? "what is the core scope of this project?" : "@dehixai what is the core scope of this project?" },
-                        { label: "Check required documents", text: selectedChannel?.name === "ai-agent" ? "which documents are pending for my role?" : "@dehixai which documents are pending for my role?" },
-                        { label: "Generate team milestones", text: selectedChannel?.name === "ai-agent" ? "can you outline the main milestones for our roles?" : "@dehixai can you outline the main milestones for our roles?" }
+                        { label: "Analyze project scope", text: selectedChannel?.type === "ai" ? "what is the core scope of this project?" : "@dehixai what is the core scope of this project?" },
+                        { label: "Check required documents", text: selectedChannel?.type === "ai" ? "which documents are pending for my role?" : "@dehixai which documents are pending for my role?" },
+                        { label: "Generate team milestones", text: selectedChannel?.type === "ai" ? "can you outline the main milestones for our roles?" : "@dehixai can you outline the main milestones for our roles?" }
                       ].map((chip, idx) => (
                         <button
                           key={idx}
@@ -1706,7 +1810,7 @@ export default function LiveRoomPage() {
               )}
               
               {/* AI thinking loader animation */}
-              {sending && (lastSentText.toLowerCase().includes("@dehixai") || selectedChannel?.name === "ai-agent") && (
+              {sending && (lastSentText.toLowerCase().includes("@dehixai") || selectedChannel?.type === "ai") && (
                 <div className="flex gap-3 my-4 flex-row animate-pulse">
                   <div className="shrink-0 self-end mb-1">
                     <div className="h-8 w-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shadow-sm shrink-0">
@@ -1804,7 +1908,7 @@ export default function LiveRoomPage() {
                   }}
                   rows={2}
                   placeholder={
-                    selectedChannel?.name === "ai-agent"
+                    selectedChannel?.type === "ai"
                       ? "Ask the AI Agent anything..."
                       : isOwner
                         ? `Message ${selectedChannel?.displayName ?? "channel"}... /help for commands`
@@ -1814,7 +1918,7 @@ export default function LiveRoomPage() {
                 />
                 <div className="flex items-center justify-between gap-3 px-1 mt-2 pt-2 border-t border-border/10">
                   <div className="flex items-center gap-2">
-                    {selectedChannel?.name !== "ai-agent" && (
+                    {selectedChannel?.type !== "ai" && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1829,7 +1933,9 @@ export default function LiveRoomPage() {
                       </button>
                     )}
                     <span className="text-[10px] font-[500] text-[#9CA3AF] hidden sm:inline">
-                      {isOwner
+                      {selectedChannel?.type === "ai"
+                        ? "Personal AI answers with only your permitted room context."
+                        : isOwner
                         ? "Use @dehixai for AI, @name to notify talent, or / commands."
                         : "Use @dehixai for AI or @name mentions in conversations."}
                     </span>
@@ -2144,6 +2250,90 @@ export default function LiveRoomPage() {
           </aside>
         )}
       </div>
+
+      {showChannelForm && isOwner && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4">
+          <div className="w-full max-w-lg rounded-xl border border-border/50 bg-background shadow-xl">
+            <div className="flex items-center justify-between border-b border-border/40 px-4 py-3">
+              <div>
+                <div className="text-sm font-bold">{editingCustomChannel ? "Manage custom channel" : "Create custom channel"}</div>
+                <div className="text-[11px] text-muted-foreground">Choose a name and select the talent who can access it.</div>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setShowChannelForm(false);
+                  setEditingCustomChannel(null);
+                }}
+                className="h-8 px-2"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+
+            <div className="space-y-4 p-4">
+              <label className="block space-y-1 text-xs">
+                <span className="font-semibold text-muted-foreground">Channel name</span>
+                <input
+                  value={customChannelName}
+                  onChange={(event) => setCustomChannelName(event.target.value)}
+                  placeholder="frontend-team"
+                  className="h-10 w-full rounded-md border border-border/50 bg-card px-3 text-sm outline-none focus:border-primary/45"
+                />
+              </label>
+
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-muted-foreground">Talent access</div>
+                <div className="max-h-72 overflow-y-auto rounded-lg border border-border/40">
+                  {talentParticipants.length === 0 ? (
+                    <div className="p-4 text-xs text-muted-foreground">No talent available in this room.</div>
+                  ) : (
+                    talentParticipants.map((participant: any) => {
+                      const person = participant.user ?? participant.userId;
+                      const checked = customChannelParticipantIds.includes(String(participant._id));
+                      return (
+                        <label
+                          key={participant._id}
+                          className="flex cursor-pointer items-center justify-between gap-3 border-b border-border/25 px-3 py-2.5 last:border-b-0 hover:bg-muted/35"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold">{person?.name ?? participant.name ?? "Talent"}</span>
+                            <span className="block truncate text-[11px] text-muted-foreground">{person?.email ?? participant.email ?? participant.status}</span>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleCustomChannelParticipant(String(participant._id))}
+                            className="h-4 w-4"
+                          />
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-border/40 px-4 py-3">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setShowChannelForm(false);
+                  setEditingCustomChannel(null);
+                }}
+                disabled={channelSaving}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => void saveCustomChannel()} disabled={channelSaving || !customChannelName.trim()}>
+                {channelSaving ? "Saving..." : editingCustomChannel ? "Save channel" : "Create channel"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {docModal && <DocModal doc={docModal} onClose={() => setDocModal(null)} />}
     </>
