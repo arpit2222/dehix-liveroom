@@ -52,7 +52,7 @@ function ensurePuppeteerCacheDir() {
 
 function resolveChromeExecutablePath(puppeteer: PuppeteerModule["default"]): string | undefined {
   const configuredPath = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
-  if (configuredPath) return configuredPath;
+  if (configuredPath && existsSync(configuredPath)) return configuredPath;
   const systemPath = SYSTEM_CHROME_PATHS.find((candidate) => existsSync(candidate));
   if (systemPath) return systemPath;
 
