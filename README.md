@@ -58,8 +58,10 @@ Before deploying, set these environment variables on the hosting platform:
 - `MONGODB_URI`: Production MongoDB/Atlas connection string.
 - `SESSION_SECRET`: At least 32 random characters. The API refuses to start in production without this.
 - `CORS_ORIGINS` or `CLIENT_ORIGIN`: Exact frontend URL, for example `https://app.example.com`. Use comma-separated values for multiple allowed origins.
-- `VITE_API_URL`: Public API origin used by the frontend build when the API is not served from the same origin.
+- `VITE_API_URL`: Public API origin used by the frontend build when the API is not served from the same origin. Use the origin only, for example `https://api.example.com`, not `https://api.example.com/api`.
 - `VITE_ALLOWED_HOSTS`: Comma-separated hostnames allowed by Vite preview/dev, for example `app.example.com`.
+- `TRUST_PROXY`: Reverse proxy hop count for the API. Production defaults to `1`; on Azure Container Apps set this to the correct trusted hop count if auth rate limits appear shared by all users.
+- `AUTH_RATE_LIMIT`: Failed login/register attempts allowed per 15 minutes, default `300`.
 - AI provider and Firebase values from `.env.example` as needed.
 
 Run these checks before handing a build to production:
@@ -73,12 +75,24 @@ npm audit --omit=dev
 Security hardening included in the backend:
 
 - HTTP security headers via Helmet.
-- API and auth rate limits via `API_RATE_LIMIT` and `AUTH_RATE_LIMIT`.
+- API and auth rate limits via `API_RATE_LIMIT` and `AUTH_RATE_LIMIT`; the stricter auth limiter applies only to login/register and successful attempts are not counted.
 - Production CORS allowlist.
 - JWT secret enforcement in production.
 - Room owner/member authorization on room, ticket, milestone, NDA, AI document, and Socket.IO room access paths.
 
 Keep the seeded demo accounts out of production databases. Use `npm run seed` only for local demos or isolated staging data.
+
+If production login returns `Invalid credentials`, first verify which database and user collection the API is reading:
+
+```bash
+npm run auth:diagnose --workspace @workspace/api-server -- --email business@demo.com --password demo123
+```
+
+This checks the Live Room `dl_users` collection and reports whether the same email appears in likely main-platform collections such as `users`, `businesses`, or `freelancers`. To create missing demo users without deleting production data:
+
+```bash
+npm run auth:diagnose --workspace @workspace/api-server -- --ensure-demo-users
+```
 
 ## AI Provider Notes
 
