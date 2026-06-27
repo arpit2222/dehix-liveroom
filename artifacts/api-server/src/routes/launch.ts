@@ -1302,17 +1302,28 @@ router.post("/:id/talent-recommendations", requireAuth, async (req: AuthRequest,
       return;
     }
     if (!session.technicalDocText) {
-      res.status(400).json({ error: "Generate the blueprint before talent recommendations" });
+      const phase2Status = session.phase2Status ?? "queued";
+      res.status(phase2Status === "generating" || phase2Status === "queued" ? 409 : 400).json({
+        error:
+          phase2Status === "generating" || phase2Status === "queued"
+            ? "Blueprint generation is still in progress. Please wait until Phase 3 is ready."
+            : "Generate the blueprint before talent recommendations",
+        phase2Status,
+      });
       return;
     }
 
-    const blueprint = JSON.parse(session.technicalDocText);
+    const blueprint = parseStoredJson<any>(session.technicalDocText);
+    if (!blueprint) {
+      res.status(422).json({ error: "Saved blueprint could not be read. Please regenerate the blueprint." });
+      return;
+    }
     const roles = extractRecommendationRoles(blueprint).slice(0, 8);
     const budgetUsd = extractBudgetUsd(blueprint);
     const credentials = await SbtCredential.find({ status: "verified" })
       .populate("userId", "name email avatarUrl walletAddress isOnline role createdAt availability hourlyRate weeklyRate monthlyRate location rating completedProjects accountStatus profileCompleted")
-      .sort({ reputationScore: -1 })
       .limit(250);
+    credentials.sort((a: any, b: any) => Number(b.reputationScore ?? 0) - Number(a.reputationScore ?? 0));
 
     const eligibleCredentials = credentials.filter((credential: any) => {
       const user = credential.userId as any;
