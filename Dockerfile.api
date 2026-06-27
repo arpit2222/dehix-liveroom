@@ -4,6 +4,18 @@ WORKDIR /app
 
 ENV PORT=8080
 ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_CACHE_DIR=/tmp/puppeteer
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    chromium \
+    fontconfig \
+    fonts-dejavu-core \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json .npmrc ./
 COPY artifacts/api-server/package.json artifacts/api-server/package.json
