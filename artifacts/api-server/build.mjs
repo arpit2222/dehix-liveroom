@@ -19,6 +19,7 @@ async function buildAll() {
       path.resolve(artifactDir, "src/index.ts"),
       path.resolve(artifactDir, "src/seed.ts"),
       path.resolve(artifactDir, "src/scripts/backfillDehixSyncFields.ts"),
+      path.resolve(artifactDir, "src/scripts/authDiagnostics.ts"),
     ],
     platform: "node",
     bundle: true,
