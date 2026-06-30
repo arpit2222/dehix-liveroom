@@ -1,6 +1,6 @@
 import { useEffect, useState, ReactNode } from "react";
 import { toast } from "sonner";
-import { Copy, Download, X, Eye, FileText, Sparkles, TrendingUp, Users, Award, AlertTriangle, Lightbulb, CheckCircle, Clock, Layers, MapPin, HelpCircle, DollarSign } from "lucide-react";
+import { Copy, Download, X, Eye, FileText, Sparkles, TrendingUp, Users, Award, AlertTriangle, Lightbulb, CheckCircle, Clock, Layers, MapPin, HelpCircle, DollarSign, ZoomIn, ZoomOut } from "lucide-react";
 
 const DOC_TYPE_LABELS: Record<string, string> = {
   pitch_deck: "Pitch Deck",
@@ -27,12 +27,14 @@ interface GeneratedDoc {
 
 interface DocModalProps {
   doc: GeneratedDoc | null;
+  roomId?: string;
   onClose: () => void;
 }
 
-export function DocModal({ doc, onClose }: DocModalProps) {
+export function DocModal({ doc, roomId, onClose }: DocModalProps) {
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [zoom, setZoom] = useState(1);
 
   useEffect(() => {
     if (!doc) return;
@@ -73,11 +75,18 @@ export function DocModal({ doc, onClose }: DocModalProps) {
   };
 
   const downloadPdf = async () => {
-    if (!doc || !doc._id) return;
+    if (!doc) return;
+    if (!doc._id && !roomId) {
+      toast.error("Cannot generate PDF without document ID or room ID");
+      return;
+    }
     setDownloadingPdf(true);
     try {
       const token = localStorage.getItem("dehix_token");
-      const res = await fetch(`/api/ai/documents/${doc._id}/pdf`, {
+      const pdfUrl = doc._id 
+        ? `/api/ai/documents/${doc._id}/pdf`
+        : `/api/rooms/${roomId}/documents/${encodeURIComponent(doc.documentType)}/pdf`;
+      const res = await fetch(pdfUrl, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("Failed to download PDF");
@@ -126,6 +135,22 @@ export function DocModal({ doc, onClose }: DocModalProps) {
           </button>
           
           <button
+            onClick={() => setZoom(prev => Math.min(prev + 0.1, 2))}
+            className="text-xs text-muted-foreground hover:text-foreground transition-all border border-border/50 rounded-md px-3 py-2 hover:bg-muted/50 inline-flex items-center gap-1.5 cursor-pointer font-medium bg-transparent"
+            title="Zoom In"
+          >
+            <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+          
+          <button
+            onClick={() => setZoom(prev => Math.max(prev - 0.1, 0.5))}
+            className="text-xs text-muted-foreground hover:text-foreground transition-all border border-border/50 rounded-md px-3 py-2 hover:bg-muted/50 inline-flex items-center gap-1.5 cursor-pointer font-medium bg-transparent"
+            title="Zoom Out"
+          >
+            <ZoomOut className="h-3.5 w-3.5" />
+          </button>
+
+          <button
             onClick={download}
             className="text-xs text-muted-foreground hover:text-foreground transition-all border border-border/50 rounded-md px-3 py-2 hover:bg-muted/55 inline-flex items-center gap-1.5 cursor-pointer font-medium bg-transparent"
           >
@@ -133,7 +158,7 @@ export function DocModal({ doc, onClose }: DocModalProps) {
             Text
           </button>
           
-          {doc._id && (
+          {(doc._id || roomId) && (
             <button
               onClick={downloadPdf}
               disabled={downloadingPdf}
@@ -160,7 +185,10 @@ export function DocModal({ doc, onClose }: DocModalProps) {
 
       {/* Desktop workspace area: centered page on gray bg */}
       <div className="flex-1 overflow-y-auto bg-muted/40 dark:bg-muted/10 py-8 px-4 flex justify-center">
-        <div className="bg-card text-foreground shadow-xl border border-border/30 rounded-xl p-8 md:p-12 w-full max-w-3xl min-h-[1000px] flex flex-col justify-between">
+        <div 
+          className="bg-card text-foreground shadow-xl border border-border/30 rounded-xl p-8 md:p-12 w-full max-w-3xl min-h-[1000px] flex flex-col justify-between transition-transform duration-200"
+          style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}
+        >
           {/* Paper Top Title Header */}
           <div className="border-b border-border/20 pb-6 mb-6">
             <div className="flex items-center gap-2 mb-2 text-xs font-semibold text-muted-foreground tracking-wider uppercase">
@@ -804,16 +832,187 @@ function renderFreelancerHiringBrief(teamData: any) {
   );
 }
 
-function renderRoadmapBudget(roadmapData: any, costData: any) {
+function RoadmapBudgetSection({ roadmapData, costData, region }: { roadmapData: any; costData: any; region?: string }) {
   const hasRoadmap = roadmapData && Object.keys(roadmapData).length > 0;
   const hasCost = costData && Object.keys(costData).length > 0;
+
+  // Choose default currency based on region name
+  const getInitialCurrency = (): "USD" | "INR" | "EUR" | "GBP" => {
+    if (!region) return "USD";
+    const regLower = region.toLowerCase();
+    if (regLower.includes("india") || regLower.includes("inr") || regLower.includes("rupee") || regLower.includes("₹")) {
+      return "INR";
+    }
+    if (regLower.includes("europe") || regLower.includes("eur") || regLower.includes("germany") || regLower.includes("france") || regLower.includes("italy") || regLower.includes("spain")) {
+      return "EUR";
+    }
+    if (regLower.includes("uk") || regLower.includes("united kingdom") || regLower.includes("gbp") || regLower.includes("london") || regLower.includes("england")) {
+      return "GBP";
+    }
+    return "USD";
+  };
+
+  const [selectedCurrency, setSelectedCurrency] = useState<"USD" | "INR" | "EUR" | "GBP">(getInitialCurrency);
+
+  const CURRENCIES = {
+    USD: { symbol: "$", rate: 1.0 },
+    INR: { symbol: "₹", rate: 83.5 },
+    EUR: { symbol: "€", rate: 0.92 },
+    GBP: { symbol: "£", rate: 0.79 },
+  };
+
+  function parseAndConvert(valStr: unknown, targetCurrency: "USD" | "INR" | "EUR" | "GBP"): string {
+    if (valStr === null || valStr === undefined) return "Not available";
+    const strVal = String(valStr).trim();
+    
+    // 1. Detect base currency
+    let baseCurrency: "USD" | "INR" | "EUR" | "GBP" = "USD";
+    const strLower = strVal.toLowerCase();
+    const regLower = region ? region.toLowerCase() : "";
+    
+    if (strLower.includes("₹") || strLower.includes("inr") || strLower.includes("rupee") || strLower.includes("lakh") || strLower.includes("crore")) {
+      baseCurrency = "INR";
+    } else if (strLower.includes("€") || strLower.includes("eur") || strLower.includes("euro")) {
+      baseCurrency = "EUR";
+    } else if (strLower.includes("£") || strLower.includes("gbp") || strLower.includes("pound")) {
+      baseCurrency = "GBP";
+    } else {
+      // Fallback to region detection
+      if (regLower.includes("india") || regLower.includes("inr") || regLower.includes("rupee") || regLower.includes("₹")) {
+        baseCurrency = "INR";
+      } else if (regLower.includes("europe") || regLower.includes("eur") || regLower.includes("germany") || regLower.includes("france") || regLower.includes("italy") || regLower.includes("spain")) {
+        baseCurrency = "EUR";
+      } else if (regLower.includes("uk") || regLower.includes("united kingdom") || regLower.includes("gbp") || regLower.includes("london") || regLower.includes("england")) {
+        baseCurrency = "GBP";
+      }
+    }
+
+    // 2. Multi-currency translation rules
+    const formatNumberClean = (num: number): string => {
+      const rounded = Math.round(num * 100) / 100;
+      return String(rounded);
+    };
+
+    // Regex to match numbers with commas/dots, optionally followed by multiplier words
+    const pattern = /([\d,]+(?:\.\d+)?)\s*(lakh|crore|million|billion|k|m)?\b/gi;
+    
+    const result = strVal.replace(pattern, (match, numStr, unit) => {
+      let num = parseFloat(numStr.replace(/,/g, ""));
+      if (isNaN(num)) return match;
+      
+      let multiplier = 1;
+      if (unit) {
+        const unitLower = unit.toLowerCase();
+        if (unitLower === "lakh") {
+          multiplier = 100000;
+        } else if (unitLower === "crore") {
+          multiplier = 10000000;
+        } else if (unitLower === "k") {
+          multiplier = 1000;
+        } else if (unitLower === "m" || unitLower === "million") {
+          multiplier = 1000000;
+        } else if (unitLower === "billion") {
+          multiplier = 1000000000;
+        }
+      }
+      
+      const absoluteBaseVal = num * multiplier;
+      const baseRate = CURRENCIES[baseCurrency].rate;
+      const valInUsd = absoluteBaseVal / baseRate;
+      
+      const targetRate = CURRENCIES[targetCurrency].rate;
+      const targetVal = valInUsd * targetRate;
+      
+      const targetSymbol = CURRENCIES[targetCurrency].symbol;
+      
+      if (targetCurrency === "INR") {
+        if (targetVal >= 10000000) {
+          const crores = targetVal / 10000000;
+          return `${targetSymbol}${formatNumberClean(crores)} crore`;
+        } else if (targetVal >= 100000) {
+          const lakhs = targetVal / 100000;
+          return `${targetSymbol}${formatNumberClean(lakhs)} lakh`;
+        } else if (targetVal >= 1000) {
+          return `${targetSymbol}${formatNumberClean(targetVal / 1000)}k`;
+        } else {
+          return `${targetSymbol}${Math.round(targetVal).toLocaleString()}`;
+        }
+      } else {
+        if (targetVal >= 1000000) {
+          const millions = targetVal / 1000000;
+          return `${targetSymbol}${formatNumberClean(millions)}M`;
+        } else if (targetVal >= 1000) {
+          const k = targetVal / 1000;
+          return `${targetSymbol}${formatNumberClean(k)}k`;
+        } else {
+          return `${targetSymbol}${Math.round(targetVal).toLocaleString()}`;
+        }
+      }
+    });
+
+    let cleaned = result;
+    cleaned = cleaned.replace(/[\$₹€£]\s*([\$₹€£])/g, "$1");
+    
+    if (targetCurrency === "USD") {
+      cleaned = cleaned.replace(/\b(inr|eur|gbp|rupees|euros|pounds)\b/gi, "").trim();
+    } else if (targetCurrency === "INR") {
+      cleaned = cleaned.replace(/\b(usd|eur|gbp|dollars|euros|pounds)\b/gi, "").trim();
+    } else if (targetCurrency === "EUR") {
+      cleaned = cleaned.replace(/\b(usd|inr|gbp|dollars|rupees|pounds)\b/gi, "").trim();
+    } else if (targetCurrency === "GBP") {
+      cleaned = cleaned.replace(/\b(usd|inr|eur|dollars|rupees|euros)\b/gi, "").trim();
+    }
+    
+    cleaned = cleaned.replace(/\s+/g, " ").trim();
+    return cleaned;
+  }
+
+  // Helper to format values recursively or as key-value grids
+  const renderItemValue = (tierVal: any) => {
+    if (typeof tierVal === "object" && tierVal !== null) {
+      return Object.entries(tierVal).map(([subK, subV]) => {
+        const subLabel = subK.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+        return (
+          <div key={subK} className="text-xs">
+            <span className="font-bold text-muted-foreground mr-1.5">{subLabel}:</span>
+            <span className="text-foreground/90 font-medium">{parseAndConvert(subV, selectedCurrency)}</span>
+          </div>
+        );
+      });
+    }
+    return <div className="text-sm font-black text-foreground">{parseAndConvert(tierVal, selectedCurrency)}</div>;
+  };
 
   return (
     <div className="space-y-6 text-foreground font-sans animate-fadeIn text-left">
       <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-        <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider bg-primary/10 border border-primary/20 text-primary px-2.5 py-1 rounded-md mb-4">
-          Roadmap & Cost Estimation
-        </span>
+        {/* Cost header and ribbon */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border/15 pb-4 mb-4">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider bg-primary/10 border border-primary/20 text-primary px-2.5 py-1 rounded-md">
+              Roadmap & Cost Estimation
+            </span>
+          </div>
+
+          {/* Switcher */}
+          {hasCost && (
+            <div className="flex items-center bg-secondary/40 border border-border/40 p-1 rounded-xl gap-0.5 self-start sm:self-auto shadow-inner">
+              {(Object.keys(CURRENCIES) as Array<keyof typeof CURRENCIES>).map((cur) => (
+                <button
+                  key={cur}
+                  onClick={() => setSelectedCurrency(cur)}
+                  className={`px-3 py-1 text-[10px] font-bold rounded-lg uppercase tracking-wide transition-all ${
+                    selectedCurrency === cur 
+                      ? "bg-card text-foreground shadow-sm border border-border/20" 
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {cur}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Cost section */}
         {hasCost && (
@@ -825,13 +1024,13 @@ function renderRoadmapBudget(roadmapData: any, costData: any) {
             {costData.mvp_budget && (
               <div className="grid gap-3 grid-cols-3">
                 {[
-                  { key: "minimum", label: "Minimum Budget", color: "border-blue-500/20 bg-blue-500/5", text: costData.mvp_budget.minimum },
-                  { key: "expected", label: "Expected Budget", color: "border-emerald-500/30 bg-emerald-500/5", text: costData.mvp_budget.expected },
-                  { key: "high_end", label: "High-End Budget", color: "border-purple-500/20 bg-purple-500/5", text: costData.mvp_budget.high_end },
+                  { key: "minimum", label: "Minimum Budget", color: "border-blue-500/20 bg-blue-500/5", val: costData.mvp_budget.minimum },
+                  { key: "expected", label: "Expected Budget", color: "border-emerald-500/30 bg-emerald-500/5", val: costData.mvp_budget.expected },
+                  { key: "high_end", label: "High-End Budget", color: "border-purple-500/20 bg-purple-500/5", val: costData.mvp_budget.high_end },
                 ].map((item) => (
                   <div key={item.key} className={`p-4 rounded-xl border ${item.color} text-center space-y-1`}>
                     <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider">{item.label}</span>
-                    <div className="text-sm font-black text-foreground">{item.text || "TBD"}</div>
+                    {renderItemValue(item.val)}
                   </div>
                 ))}
               </div>
@@ -841,12 +1040,12 @@ function renderRoadmapBudget(roadmapData: any, costData: any) {
               <div className="pt-2">
                 <h4 className="text-[10px] font-extrabold uppercase tracking-wider text-muted-foreground mb-2">Estimated Monthly Operations</h4>
                 <div className="grid gap-3 grid-cols-3">
-                  {Object.entries(costData.monthly_operational_cost).map(([tier, value]: [string, any]) => {
+                  {Object.entries(costData.monthly_operational_cost).map(([tier, val]: [string, any]) => {
                     const label = tier.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
                     return (
-                      <div key={tier} className="p-3 border border-border bg-background/50 rounded-lg text-center">
+                      <div key={tier} className="p-3 border border-border bg-background/50 rounded-lg text-center space-y-1">
                         <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-wider">{label}</span>
-                        <div className="text-xs font-bold text-foreground mt-0.5">{value || "TBD"}</div>
+                        {renderItemValue(val)}
                       </div>
                     );
                   })}
@@ -858,7 +1057,10 @@ function renderRoadmapBudget(roadmapData: any, costData: any) {
               <div className="pt-2">
                 <h4 className="text-[10px] font-extrabold uppercase tracking-wider text-muted-foreground mb-2">Key Cost Drivers</h4>
                 <ul className="list-disc pl-4 space-y-1 text-xs text-foreground/80">
-                  {costData.major_cost_drivers.map((driver: string, idx: number) => <li key={idx}>{driver}</li>)}
+                  {costData.major_cost_drivers.map((driver: string, idx: number) => {
+                    const convertedDriver = parseAndConvert(driver, selectedCurrency);
+                    return <li key={idx}>{convertedDriver}</li>;
+                  })}
                 </ul>
               </div>
             )}
@@ -1087,9 +1289,13 @@ function JsonDocumentRenderer({ data, documentType }: { data: any; documentType?
               { key: "target_audience", title: "Target Audience", icon: <Users className="h-4 w-4" /> },
               { key: "competitor_analysis", title: "Competitor Landscape", icon: <Layers className="h-4 w-4" /> },
               { key: "competitive_moat", title: "Competitive Moat", icon: <Award className="h-4 w-4" /> },
+              { key: "market_size_tam", title: "Total Addressable Market (TAM)", icon: <TrendingUp className="h-4 w-4" /> },
+              { key: "market_size_sam", title: "Serviceable Addressable Market (SAM)", icon: <TrendingUp className="h-4 w-4" /> },
+              { key: "market_size_som", title: "Serviceable Obtainable Market (SOM)", icon: <TrendingUp className="h-4 w-4" /> },
               { key: "revenue_model", title: "Revenue Model", icon: <DollarSign className="h-4 w-4" /> },
               { key: "unit_economics", title: "Unit Economics", icon: <DollarSign className="h-4 w-4" /> },
               { key: "cost_estimation", title: "Cost Estimation & Capital Requirement", icon: <DollarSign className="h-4 w-4" /> },
+              { key: "pricing_strategy", title: "Pricing & Tiering Strategy", icon: <DollarSign className="h-4 w-4" /> },
               { key: "go_to_market_strategy", title: "Go To Market Strategy", icon: <Clock className="h-4 w-4" /> }
             ].map(({ key, title, icon }) => {
               const textContent = research[key];
@@ -1310,7 +1516,7 @@ function JsonDocumentRenderer({ data, documentType }: { data: any; documentType?
 
           {activeTab === "roadmap" && (
             <div className="space-y-6">
-              {renderRoadmapBudget(data.development_roadmap, data.cost_estimation)}
+              <RoadmapBudgetSection roadmapData={data.development_roadmap} costData={data.cost_estimation} region={data.region_used} />
               {renderFreelancerHiringBrief(data.team_requirements)}
             </div>
           )}
@@ -1337,7 +1543,7 @@ function JsonDocumentRenderer({ data, documentType }: { data: any; documentType?
   }
 
   if (documentType === "roadmap_budget" || data.development_roadmap !== undefined || data.cost_estimation !== undefined) {
-    return renderRoadmapBudget(data.development_roadmap || data, data.cost_estimation || data);
+    return <RoadmapBudgetSection roadmapData={data.development_roadmap || data} costData={data.cost_estimation || data} region={data.region_used || (data as any).region} />;
   }
 
   // Generic JSON Renderer fallback (useful for blueprint or other nested documents)

@@ -26,6 +26,7 @@ import {
   Users,
   Video,
   X,
+  Trash2,
 } from "lucide-react";
 
 type Channel = {
@@ -252,11 +253,13 @@ export default function LiveRoomPage() {
   const endRef = useRef<HTMLDivElement | null>(null);
 
   // States from 3-panel / design enhancements layout
-  const [activeTab, setActiveTab] = useState<"channels" | "roles" | "access">("channels");
+  const [activeTab, setActiveTab] = useState<"channels" | "roles">("channels");
   const [expandedDocType, setExpandedDocType] = useState<string | null>(null);
   const [lastSentText, setLastSentText] = useState("");
   const [accessSearch, setAccessSearch] = useState("");
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
+  const [expandedPermissions, setExpandedPermissions] = useState<Record<string, boolean>>({});
+  const [invitedOpen, setInvitedOpen] = useState(false);
 
   const selectedChannel = useMemo(
     () => workspace?.channels.find((channel) => channel._id === selectedChannelId) ?? null,
@@ -535,9 +538,9 @@ export default function LiveRoomPage() {
       if (!res.ok) throw new Error(data.error ?? "Command execution failed");
       if (data.message) mergeMessage(data.message);
       if (data.channel?._id) {
-        await loadWorkspace(data.channel._id);
+        await loadWorkspace(data.channel._id, true);
       } else {
-        await loadWorkspace(selectedChannelId);
+        await loadWorkspace(selectedChannelId, true);
       }
       toast.success("Command executed");
       setPendingCommand(null);
@@ -594,7 +597,7 @@ export default function LiveRoomPage() {
       if (data.message) mergeMessage(data.message);
       setShowMeetLinkForm(false);
       setMeetLinkDraft("");
-      await loadWorkspace(selectedChannel._id);
+      await loadWorkspace(selectedChannel._id, true);
       toast.success("Meet link shared");
     } catch (err: any) {
       toast.error(err.message ?? "Failed to share Meet link");
@@ -614,7 +617,7 @@ export default function LiveRoomPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to update interview");
-      await loadWorkspace(selectedChannel._id);
+      await loadWorkspace(selectedChannel._id, true);
       toast.success("Interview updated");
     } catch (err: any) {
       toast.error(err.message ?? "Failed to update interview");
@@ -839,6 +842,27 @@ export default function LiveRoomPage() {
   const togglePermission = async (talent: PermissionTalent, doc: PermissionTalent["documents"][number]) => {
     const key = `${talent.participantId}:${doc.docType}`;
     setPermissionSaving(key);
+    
+    // Optimistic UI Update
+    setWorkspace((prev) => {
+      if (!prev) return prev;
+      const updatedMatrix = prev.permissionMatrix.map(t => {
+        if (t.participantId === talent.participantId) {
+          return {
+            ...t,
+            documents: t.documents.map(d => {
+              if (d.docType === doc.docType) {
+                return { ...d, canView: !d.canView };
+              }
+              return d;
+            })
+          };
+        }
+        return t;
+      });
+      return { ...prev, permissionMatrix: updatedMatrix };
+    });
+
     try {
       const res = await fetch(`/api/rooms/${roomId}/document-permissions`, {
         method: "PATCH",
@@ -851,9 +875,12 @@ export default function LiveRoomPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to update permission");
-      await loadWorkspace(selectedChannelId, true);
+      // Background sync, no need to await loadWorkspace if we optimistically updated unless we want to ensure sync
+      void loadWorkspace(selectedChannelId, false);
     } catch (err: any) {
       toast.error(err.message ?? "Failed to update permission");
+      // Revert optimistic update on failure by reloading workspace
+      await loadWorkspace(selectedChannelId, true);
     } finally {
       setPermissionSaving(null);
     }
@@ -1064,20 +1091,7 @@ export default function LiveRoomPage() {
               <Briefcase className="h-5 w-5" />
             </button>
 
-            {/* Access Control Tab (Only visible if isOwner) */}
-            {isOwner && (
-              <button
-                onClick={() => setActiveTab("access")}
-                className={`h-10 w-10 rounded-xl flex items-center justify-center transition-all ${
-                  activeTab === "access"
-                    ? "bg-primary text-primary-foreground shadow-md scale-105"
-                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                }`}
-                title="Access Control Settings"
-              >
-                <Shield className="h-5 w-5" />
-              </button>
-            )}
+
           </div>
 
           {/* Bottom Actions */}
@@ -1210,252 +1224,108 @@ export default function LiveRoomPage() {
               </div>
             )}
 
-            {activeTab === "access" && isOwner && (
-              <div className="space-y-4">
-                <PanelHeader icon={<Shield className="h-3.5 w-3.5" />} label="Access Settings" />
-                <div className="rounded-lg border border-border/30 bg-muted/20 p-3 text-[11px] text-muted-foreground leading-relaxed animate-fadeIn">
-                  You are editing permissions in the central panel. Use the toggles to configure <span className="font-semibold text-foreground">View</span> access.
-                </div>
-                <div className="space-y-1.5 pt-2">
-                  <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Quick Filter</div>
-                  {workspace.permissionMatrix.map((talent) => {
-                    const totalDocs = talent.documents.length;
-                    const grantedViewCount = talent.documents.filter(d => d.canView).length;
-                    const isFullyGranted = grantedViewCount === totalDocs;
-                    return (
-                      <button
-                        key={talent.participantId}
-                        onClick={() => {
-                          setAccessSearch(talent.name);
-                        }}
-                        className={`w-full flex items-center justify-between rounded-md p-2 text-left text-xs hover:bg-muted/40 transition-colors border ${
-                          accessSearch === talent.name ? "border-primary/30 bg-primary/5" : "border-transparent"
-                        }`}
-                      >
-                        <span className="truncate font-semibold text-foreground">{talent.name}</span>
-                        <span className={`text-[9px] px-1 rounded ${isFullyGranted ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground"}`}>
-                          {grantedViewCount}/{totalDocs}
-                        </span>
-                      </button>
-                    );
-                  })}
-                  {accessSearch && (
-                    <button
-                      onClick={() => setAccessSearch("")}
-                      className="w-full text-center text-[10px] text-primary hover:underline mt-2 cursor-pointer"
-                    >
-                      Clear Filter
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
+
           </div>
         </aside>
 
-        {/* Middle Main Chat Panel OR Access Control Section */}
-        {activeTab === "access" && isOwner ? (
-          <main className="flex-1 min-w-0 flex flex-col bg-white dark:bg-card border border-border/40 rounded-[24px] my-3 mx-2 shadow-sm overflow-hidden animate-fadeIn">
-            {/* Header */}
-            <header className="h-14 shrink-0 border-b border-[#F1F2F6] dark:border-border/30 px-5 flex items-center justify-between gap-3 bg-background/75">
-              <div className="flex items-center gap-2 min-w-0">
-                <Shield className="h-4 w-4 text-primary" />
-                <div className="min-w-0">
-                  <div className="text-sm font-bold text-foreground">Document Access Control</div>
-                  <div className="text-[10px] text-muted-foreground">Manage view permissions for workspace participants.</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() => void grantFullAccessToAll()}
-                  className="text-xs font-bold text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 bg-emerald-500/5 hover:bg-emerald-500/10 px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 animate-fadeIn"
-                >
-                  Grant All View Access
-                </button>
-                <button
-                  onClick={() => void revokeFullAccessFromAll()}
-                  className="text-xs font-bold text-destructive border border-destructive/25 bg-destructive/5 hover:bg-destructive/10 px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 animate-fadeIn"
-                >
-                  Revoke All View Access
-                </button>
-              </div>
-            </header>
-
-            {/* Content: A list of participants in a table/grid style */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* Search and Filters */}
-              <div className="relative max-w-md animate-fadeIn">
-                <input
-                  type="text"
-                  value={accessSearch}
-                  onChange={(e) => setAccessSearch(e.target.value)}
-                  placeholder="Search participants by name or role..."
-                  className="w-full bg-muted/45 border border-border/60 rounded-xl px-3.5 py-2 text-xs outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/45 transition-colors text-foreground"
-                />
-                {accessSearch && (
-                  <button
-                    onClick={() => setAccessSearch("")}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-
-              {filteredMatrix.length === 0 ? (
-                <div className="text-center py-12 border border-dashed border-border/40 rounded-2xl bg-muted/10">
-                  <Shield className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
-                  <p className="text-xs text-muted-foreground">No participants matched your search.</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {filteredMatrix.map((talent) => {
-                    return (
-                      <div key={talent.participantId} className="border border-border/40 rounded-2xl bg-card/45 shadow-sm p-4 hover:border-border/70 transition-all">
-                        {/* Participant info header */}
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/20 pb-3 mb-3">
-                          <div className="flex items-center gap-2.5">
-                            <div className="h-10 w-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center font-bold text-sm text-primary">
-                              {talent.name?.[0]?.toUpperCase() ?? "T"}
-                            </div>
-                            <div>
-                              <h4 className="text-sm font-bold text-foreground">{talent.name}</h4>
-                              <p className="text-[10px] text-muted-foreground">
-                                {talent.roleTitle ?? "No Role Assigned"} · {talent.email ?? "No Email"} · Status: <span className="font-semibold uppercase text-primary/80">{talent.status}</span>
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => void grantFullAccessToParticipant(talent)}
-                              className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
-                            >
-                              Grant All
-                            </button>
-                            <button
-                              onClick={() => void revokeAllAccessForParticipant(talent)}
-                              className="text-[11px] font-bold text-destructive bg-destructive/5 hover:bg-destructive/10 border border-destructive/20 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
-                            >
-                              Revoke All
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Document grid inside participant block */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          {talent.documents.map((doc) => {
-                            const permissionKey = `${talent.participantId}:${doc.docType}`;
-                            return (
-                              <div key={doc.docType} className="flex items-center justify-between p-3 rounded-xl border border-border/30 bg-background/50 hover:bg-background/80 transition-colors">
-                                <div className="flex items-center gap-2 min-w-0 mr-3">
-                                  <FileText className="h-4 w-4 text-muted-foreground/70 shrink-0" />
-                                  <span className="text-xs font-semibold text-foreground/90 truncate">{doc.title}</span>
-                                </div>
-                                <div className="flex items-center gap-4 shrink-0">
-                                  {/* View Permission Toggle */}
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-[10px] text-muted-foreground font-medium">View Access</span>
-                                    <button
-                                      onClick={() => void togglePermission(talent, doc)}
-                                      disabled={permissionSaving === permissionKey}
-                                      className={`w-8 h-4.5 rounded-full p-0.5 transition-colors duration-200 focus:outline-none shrink-0 relative cursor-pointer ${
-                                        doc.canView ? "bg-primary" : "bg-muted-foreground/30"
-                                      }`}
-                                    >
-                                      <div
-                                        className={`bg-white w-3.5 h-3.5 rounded-full shadow-sm transform transition-transform duration-200 ${
-                                          doc.canView ? "translate-x-3.5" : "translate-x-0"
-                                        }`}
-                                      />
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </main>
-        ) : (
-          <main className="flex-1 min-w-0 flex flex-col bg-white dark:bg-card border border-border/40 rounded-[24px] my-3 mx-2 shadow-sm overflow-hidden">
-            <header className="h-14 shrink-0 border-b border-[#F1F2F6] dark:border-border/30 px-5 flex items-center justify-between gap-3 bg-background/75">
-              <div className="flex items-center gap-2 min-w-0">
+        <main className="flex-1 min-w-0 flex flex-col bg-white dark:bg-card border border-border/40 rounded-[24px] my-3 mx-2 shadow-sm overflow-hidden">
+            <header className="h-16 shrink-0 border-b border-border/30 px-5 flex items-center justify-between gap-3 bg-background/75 relative z-10">
+              <div className="flex items-center gap-3.5 min-w-0">
                 {selectedChannel?.name === "ai-agent" ? (
-                  <Bot className="h-4 w-4 text-primary" />
+                  <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
+                    <Bot className="h-4 w-4" />
+                  </div>
                 ) : selectedChannel?.type === "general" ? (
-                  <Hash className="h-4 w-4 text-muted-foreground" />
+                  <div className="w-8 h-8 rounded-lg bg-secondary/60 border border-border/20 flex items-center justify-center text-muted-foreground shrink-0">
+                    <Hash className="h-4 w-4" />
+                  </div>
                 ) : selectedChannel?.type === "interview" ? (
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                  <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
+                    <Calendar className="h-4 w-4" />
+                  </div>
                 ) : (
-                  <Lock className="h-4 w-4 text-muted-foreground" />
+                  <div className="w-8 h-8 rounded-lg bg-secondary/60 border border-border/20 flex items-center justify-center text-muted-foreground shrink-0">
+                    <Lock className="h-4 w-4" />
+                  </div>
                 )}
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <div className="text-sm font-bold truncate text-foreground">{selectedChannel?.displayName ?? "Channel"}</div>
+                    {selectedChannel?.type === "interview" && (
+                      <span className={`inline-flex items-center text-[9px] font-bold rounded-md px-1.5 py-0.5 border uppercase tracking-wider ${
+                        selectedChannel.interviewStatus === "completed"
+                          ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-500"
+                          : selectedChannel.interviewStatus === "live"
+                            ? "border-green-500/20 bg-green-500/10 text-green-500 animate-pulse"
+                            : "border-primary/20 bg-primary/10 text-primary"
+                      }`}>
+                        {selectedChannel.interviewStatus ?? "scheduled"}
+                      </span>
+                    )}
                   </div>
-                  <div className="text-[10px] text-muted-foreground truncate">
+                  <div className="text-[10px] text-muted-foreground truncate leading-none mt-0.5">
                     {selectedChannel?.name === "ai-agent"
                       ? "Dedicated AI Assistant. Type your queries directly; no need to use @dehixai."
                       : selectedChannel?.type === "general"
                         ? "General chat. Mention @dehixai when you want AI to participate."
                         : selectedChannel?.type === "interview"
-                          ? `Interview workspace · ${selectedChannel.interviewStatus ?? "scheduled"}`
+                          ? "Collaborative workspace for conducting technical interviews."
                           : "Private business-talent conversation."}
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-3 shrink-0">
+              <div className="flex items-center gap-2.5 shrink-0">
                 {selectedChannel?.type === "interview" ? (
-                  <div className="flex items-center gap-2">
-                    {isOwner && selectedChannelParticipants.slice(0, 3).map((participant: any) => {
-                      const person = participant.user ?? participant.userId;
-                      return (
-                        <span key={participant._id} className="hidden lg:inline-flex rounded-full border border-border/40 px-2 py-1 text-[10px] font-semibold text-muted-foreground">
-                          {person?.name ?? participant.name ?? "Talent"}
-                        </span>
-                      );
-                    })}
+                  <div className="flex items-center gap-1.5">
                     {selectedChannel.interviewMeetLink && (
                       <a
                         href={selectedChannel.interviewMeetLink}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/25 bg-primary/5 px-2.5 text-[10px] font-bold text-primary"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 px-3 text-xs font-bold text-primary hover:bg-primary/20 transition-all cursor-pointer shadow-xs"
                       >
                         <Video className="h-3.5 w-3.5" /> Join Meet
                       </a>
                     )}
                     {isOwner && !selectedChannel.interviewMeetLink && (
-                      <Button size="sm" variant="outline" onClick={() => void createMeet()} disabled={commandLoading} className="h-8 text-xs">
-                        <Video className="h-3.5 w-3.5 mr-1" /> Create Meet
+                      <Button size="sm" variant="outline" onClick={() => void createMeet()} disabled={commandLoading} className="h-8 text-xs font-semibold gap-1">
+                        <Video className="h-3.5 w-3.5" /> Create Meet
                       </Button>
                     )}
                     {isOwner && (
                       <>
-                        <Button size="sm" variant="outline" onClick={() => setShowInterviewNotes((value) => !value)} className="h-8 text-xs">
-                          Notes
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          onClick={() => setShowInterviewNotes((value) => !value)} 
+                          className={`h-8 text-xs font-semibold gap-1 ${
+                            showInterviewNotes ? "bg-primary/5 border-primary text-primary" : ""
+                          }`}
+                        >
+                          <FileText className="h-3.5 w-3.5" /> Notes
                         </Button>
-                        <Button size="sm" variant="outline" onClick={() => void updateInterview({ status: "completed" })} disabled={interviewSaving} className="h-8 text-xs">
-                          Mark Complete
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          onClick={() => void updateInterview({ status: "completed" })} 
+                          disabled={interviewSaving || selectedChannel.interviewStatus === "completed"} 
+                          className="h-8 text-xs font-semibold gap-1"
+                        >
+                          <Check className="h-3.5 w-3.5" /> Mark Complete
                         </Button>
                         <Button
                           size="sm"
                           onClick={() => openOfferForm()}
                           disabled={selectedChannel.interviewStatus !== "completed" || selectedChannelParticipants.length === 0}
-                          className="h-8 text-xs"
+                          className="h-8 text-xs font-bold gap-1"
                         >
-                          <Briefcase className="h-3.5 w-3.5 mr-1" /> Send Offer
+                          <Briefcase className="h-3.5 w-3.5" /> Send Offer
                         </Button>
                       </>
                     )}
                   </div>
                 ) : (
-                  <div className="hidden md:flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <div className="hidden md:flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
                     <Sparkles className="h-3.5 w-3.5 text-primary" />
                     Permission-aware AI
                   </div>
@@ -1665,22 +1535,28 @@ export default function LiveRoomPage() {
                 <div className="text-sm text-muted-foreground animate-pulse">Loading messages...</div>
               ) : messages.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center p-6 text-center max-w-md mx-auto space-y-6 animate-fadeIn">
-                  <div className="w-16 h-16 rounded-2xl bg-muted border border-border/60 flex items-center justify-center text-primary shadow-inner">
-                    <Bot className="h-8 w-8 text-foreground" />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="text-base font-bold text-foreground">
-                      {selectedChannel?.name === "ai-agent" ? "Welcome to your AI Agent Chat" : "Welcome to the Workspace Chat"}
+                  {/* Premium Glowing Bot Badge */}
+                  <div className="relative flex items-center justify-center">
+                    <div className="absolute -inset-2 bg-primary/10 rounded-full blur-xl animate-pulse" />
+                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-primary/15 via-primary/5 to-transparent border border-primary/20 flex items-center justify-center text-primary shadow-lg shadow-primary/5 relative z-10">
+                      <Bot className="h-8 w-8 text-primary" />
                     </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed">
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <h3 className="text-lg font-bold tracking-tight text-foreground">
+                      {selectedChannel?.name === "ai-agent" ? "Welcome to your AI Agent Chat" : "Welcome to the Workspace Chat"}
+                    </h3>
+                    <p className="text-xs text-muted-foreground/80 leading-relaxed">
                       {selectedChannel?.name === "ai-agent"
                         ? "Ask anything about the project validation, blueprints, features, roadmap, and technologies. The AI will assist you instantly."
                         : "Start a conversation with your team or call @dehixai for permission-aware AI assistance with project tasks, contracts, or milestones."}
                     </p>
                   </div>
+                  
                   <div className="w-full space-y-2 pt-2">
-                    <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest text-left px-1">Suggested Prompt Actions</div>
-                    <div className="flex flex-wrap gap-2 justify-start">
+                    <div className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest text-center">Suggested Prompt Actions</div>
+                    <div className="flex flex-wrap gap-2 justify-center">
                       {[
                         { label: "Analyze project scope", text: selectedChannel?.name === "ai-agent" ? "what is the core scope of this project?" : "@dehixai what is the core scope of this project?" },
                         { label: "Check required documents", text: selectedChannel?.name === "ai-agent" ? "which documents are pending for my role?" : "@dehixai which documents are pending for my role?" },
@@ -1691,9 +1567,10 @@ export default function LiveRoomPage() {
                           onClick={() => {
                             setMessageInput(chip.text);
                           }}
-                          className="text-left text-[12px] font-[600] rounded-xl border border-[#E5E7EB] bg-white text-[#4b5563] hover:bg-slate-50 px-3.5 py-1.5 transition-all cursor-pointer shadow-sm hover:shadow dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-slate-200 animate-fadeIn"
+                          className="text-left text-xs font-semibold rounded-2xl border border-border/30 bg-card/45 hover:bg-primary/5 hover:border-primary/30 text-muted-foreground hover:text-foreground px-4 py-2.5 transition-all duration-200 cursor-pointer shadow-sm hover:shadow hover:-translate-y-0.5 active:translate-y-0 flex items-center gap-2 animate-in fade-in duration-200"
                         >
-                          ⚡ {chip.label}
+                          <Sparkles className="h-3.5 w-3.5 text-primary/80 shrink-0" />
+                          {chip.label}
                         </button>
                       ))}
                     </div>
@@ -1837,7 +1714,7 @@ export default function LiveRoomPage() {
                   <Button 
                     onClick={() => void sendMessage()} 
                     disabled={!messageInput.trim() || sending} 
-                    className="h-8 px-4 text-xs font-bold bg-[#7E8590] text-white hover:bg-[#6c727c] rounded-lg disabled:opacity-50 transition-all shadow hover:shadow-md cursor-pointer border border-transparent"
+                    className="h-8 px-4 text-xs font-bold bg-black dark:bg-white text-white dark:text-black hover:bg-black/90 dark:hover:bg-white/90 rounded-lg disabled:opacity-50 transition-all shadow hover:shadow-md cursor-pointer border border-transparent"
                   >
                     {sending ? (
                       <span className="inline-flex items-center gap-1.5">
@@ -1854,7 +1731,6 @@ export default function LiveRoomPage() {
               </div>
             </div>
           </main>
-        )}
 
         {/* Right Side Panel - Participants & Documents (300px) */}
         {rightPanelVisible && (
@@ -1897,29 +1773,44 @@ export default function LiveRoomPage() {
                       .map((participant: any) => {
                         const person = participant.user ?? participant.userId;
                         const role = workspace.roles.find((item) => String(item._id) === String(participant.roleId));
+                        const talentMatrix = workspace.permissionMatrix.find(t => String(t.participantId) === String(participant._id));
+                        const totalDocs = talentMatrix?.documents.length ?? 0;
+                        const grantedViewCount = talentMatrix?.documents.filter(d => d.canView).length ?? 0;
+                        
                         return (
                           <div key={participant._id} className="rounded-xl border border-border/40 bg-background/45 p-2.5 shadow-sm hover:bg-background/80 hover:border-border/60 transition-all duration-200">
-                            <div className="flex items-center gap-2.5">
-                              {/* Initials Avatar with Green Active Dot */}
-                              <div className="h-9 w-9 rounded-xl bg-primary/10 text-primary border border-primary/20 flex items-center justify-center font-bold text-xs shrink-0 relative shadow-sm">
-                                {person?.name?.[0]?.toUpperCase() ?? "T"}
-                                <span className="absolute bottom-[-1.5px] right-[-1.5px] h-3 w-3 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900 shadow-sm animate-pulse"></span>
+                            <div className="flex items-center justify-between gap-2.5">
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                {/* Initials Avatar with Green Active Dot */}
+                                <div className="h-9 w-9 rounded-xl bg-primary/10 text-primary border border-primary/20 flex items-center justify-center font-bold text-xs shrink-0 relative shadow-sm">
+                                  {person?.name?.[0]?.toUpperCase() ?? "T"}
+                                  <span className="absolute bottom-[-1.5px] right-[-1.5px] h-3 w-3 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900 shadow-sm animate-pulse"></span>
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-xs font-bold truncate text-foreground">{person?.name ?? "Talent"}</div>
+                                  {role?.roleTitle && (
+                                    <div className="text-[10px] text-muted-foreground truncate leading-none mt-1">{role.roleTitle}</div>
+                                  )}
+                                </div>
                               </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="text-xs font-bold truncate text-foreground">{person?.name ?? "Talent"}</div>
-                                {role?.roleTitle && (
-                                  <div className="text-[10px] text-muted-foreground truncate leading-none mt-1">{role.roleTitle}</div>
-                                )}
-                              </div>
+                              {isOwner && (
+                                <button
+                                  onClick={() => runParticipantCommand("remove", participant)}
+                                  className="h-8 w-8 rounded-lg border border-border text-foreground hover:bg-muted/50 inline-flex items-center justify-center cursor-pointer transition-all shrink-0"
+                                  title="Remove talent"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </div>
                             
                             {/* Command action buttons for room owner */}
                             {isOwner && (
-                              <div className="mt-2.5 grid grid-cols-3 gap-1.5 border-t border-border/20 pt-2 animate-fadeIn">
+                              <div className="mt-2.5 flex items-center gap-1 border-t border-border/20 pt-2 animate-fadeIn flex-wrap">
                                 <button
                                   onClick={() => runParticipantCommand("interview", participant)}
                                   disabled={!["joined", "accepted"].includes(participant.status)}
-                                  className="rounded-md border border-border/40 px-1.5 py-1 text-[9px] font-bold text-muted-foreground hover:text-foreground disabled:opacity-40 hover:bg-muted/40 cursor-pointer text-center"
+                                  className="rounded-lg border border-border/60 bg-background/50 px-2.5 py-1 text-[10px] font-bold text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer transition-all disabled:opacity-40 disabled:pointer-events-none"
                                   title="Create interview"
                                 >
                                   Interview
@@ -1927,18 +1818,72 @@ export default function LiveRoomPage() {
                                 <button
                                   onClick={() => openOfferForm(participant)}
                                   disabled={!canSendOfferToParticipant(participant)}
-                                  className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-1.5 py-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40 cursor-pointer text-center"
+                                  className="rounded-lg border border-border/60 bg-background/50 px-2.5 py-1 text-[10px] font-bold text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer transition-all disabled:opacity-40 disabled:pointer-events-none"
                                   title="Send offer after completed interview"
                                 >
                                   Offer
                                 </button>
                                 <button
-                                  onClick={() => runParticipantCommand("remove", participant)}
-                                  className="rounded-md border border-rose-500/30 bg-rose-500/5 px-1.5 py-1 text-[9px] font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 cursor-pointer text-center"
-                                  title="Remove talent"
+                                  onClick={() => setExpandedPermissions((prev) => ({ ...prev, [participant._id]: !prev[participant._id] }))}
+                                  className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold cursor-pointer transition-all ${
+                                    expandedPermissions[participant._id]
+                                      ? "border-foreground bg-foreground text-background dark:border-foreground dark:bg-foreground dark:text-background"
+                                      : "border-border/60 bg-background/50 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                                  }`}
+                                  title="Manage Document Access Control"
                                 >
-                                  Remove
+                                  Access {talentMatrix ? `(${grantedViewCount}/${totalDocs})` : ""}
                                 </button>
+                              </div>
+                            )}
+
+                            {/* Collapsible Document Access Matrix inside Card */}
+                            {isOwner && expandedPermissions[participant._id] && talentMatrix && (
+                              <div className="mt-2.5 border-t border-border/20 pt-2 space-y-2 animate-fadeIn">
+                                <div className="flex items-center justify-between text-[9px] font-bold text-muted-foreground uppercase tracking-widest pl-0.5">
+                                  <span>Document Access</span>
+                                  <div className="flex gap-1.5">
+                                    <button 
+                                      onClick={() => void grantFullAccessToParticipant(talentMatrix)} 
+                                      className="text-primary hover:underline cursor-pointer"
+                                    >
+                                      Grant All
+                                    </button>
+                                    <span>·</span>
+                                    <button 
+                                      onClick={() => void revokeAllAccessForParticipant(talentMatrix)} 
+                                      className="text-destructive hover:underline cursor-pointer"
+                                    >
+                                      Revoke All
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="space-y-1">
+                                  {talentMatrix.documents.map((doc) => {
+                                    const permissionKey = `${talentMatrix.participantId}:${doc.docType}`;
+                                    return (
+                                      <div key={doc.docType} className="flex items-center justify-between text-[10px] p-1.5 rounded-lg bg-background/50 border border-border/10">
+                                        <div className="flex items-center gap-1.5 min-w-0 mr-2">
+                                          <FileText className="h-3 w-3 text-muted-foreground/75 shrink-0" />
+                                          <span className="truncate text-foreground/80 font-medium" title={doc.title}>{doc.title}</span>
+                                        </div>
+                                        <button
+                                          onClick={() => void togglePermission(talentMatrix, doc)}
+                                          disabled={permissionSaving === permissionKey}
+                                          className={`w-7 h-4 rounded-full p-0.5 transition-colors duration-200 shrink-0 relative cursor-pointer ${
+                                            doc.canView ? "bg-primary" : "bg-muted-foreground/30"
+                                          }`}
+                                        >
+                                          <div
+                                            className={`bg-white w-3 h-3 rounded-full shadow-sm transform transition-transform duration-200 ${
+                                              doc.canView ? "translate-x-3" : "translate-x-0"
+                                            }`}
+                                          />
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             )}
                           </div>
@@ -1947,64 +1892,61 @@ export default function LiveRoomPage() {
                   )}
                 </div>
 
-                {/* Invited/Pending Sub-section */}
-                <div className="space-y-2 pt-2 animate-fadeIn">
-                  <div className="text-[10px] font-bold text-muted-foreground/70 tracking-wider uppercase pl-0.5">Invited / Pending</div>
-                  {workspace.participants.filter(p => p.status !== "joined" && p.status !== "accepted").length === 0 ? (
-                    <div className="text-[10px] text-muted-foreground/50 italic px-1">No pending invitations</div>
-                  ) : (
-                    workspace.participants
-                      .filter(p => p.status !== "joined" && p.status !== "accepted")
-                      .map((participant: any) => {
-                        const person = participant.user ?? participant.userId;
-                        const role = workspace.roles.find((item) => String(item._id) === String(participant.roleId));
-                        return (
-                          <div key={participant._id} className="rounded-xl border border-border/40 bg-background/45 p-2.5 shadow-sm hover:bg-background/80 hover:border-border/60 transition-all duration-200">
-                            <div className="flex items-center gap-2.5">
-                              {/* Initials Avatar with Orange Pending Dot */}
-                              <div className="h-9 w-9 rounded-xl bg-muted border border-border flex items-center justify-center font-bold text-xs text-muted-foreground shrink-0 relative shadow-sm">
-                                {person?.name?.[0]?.toUpperCase() ?? "T"}
-                                <span className="absolute bottom-[-1.5px] right-[-1.5px] h-3 w-3 rounded-full bg-amber-500 border-2 border-white dark:border-slate-900 shadow-sm"></span>
+                {/* Invited/Pending Collapsible Dropdown */}
+                <div className="space-y-2 pt-2 animate-fadeIn border-t border-border/10">
+                  <button
+                    onClick={() => setInvitedOpen(!invitedOpen)}
+                    className="w-full flex items-center justify-between text-[10px] font-bold text-muted-foreground/70 tracking-wider uppercase pl-0.5 py-1.5 hover:text-foreground transition-all"
+                  >
+                    <span>
+                      Invited / Pending ({workspace.participants.filter(p => p.status !== "joined" && p.status !== "accepted").length})
+                    </span>
+                    <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${
+                      invitedOpen ? "rotate-180" : ""
+                    }`} />
+                  </button>
+
+                  {invitedOpen && (
+                    <div className="space-y-2 animate-fadeIn mt-1">
+                      {workspace.participants.filter(p => p.status !== "joined" && p.status !== "accepted").length === 0 ? (
+                        <div className="text-[10px] text-muted-foreground/50 italic px-1 py-1">No pending invitations</div>
+                      ) : (
+                        workspace.participants
+                          .filter(p => p.status !== "joined" && p.status !== "accepted")
+                          .map((participant: any) => {
+                            const person = participant.user ?? participant.userId;
+                            const role = workspace.roles.find((item) => String(item._id) === String(participant.roleId));
+                            return (
+                              <div key={participant._id} className="rounded-xl border border-border/40 bg-background/45 p-2.5 shadow-sm hover:bg-background/80 hover:border-border/60 transition-all duration-200">
+                                <div className="flex items-center justify-between gap-2.5">
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                    {/* Initials Avatar with Orange Pending Dot */}
+                                    <div className="h-9 w-9 rounded-xl bg-muted border border-border flex items-center justify-center font-bold text-xs text-muted-foreground shrink-0 relative shadow-sm">
+                                      {person?.name?.[0]?.toUpperCase() ?? "T"}
+                                      <span className="absolute bottom-[-1.5px] right-[-1.5px] h-3 w-3 rounded-full bg-amber-500 border-2 border-white dark:border-slate-900 shadow-sm"></span>
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-xs italic font-medium text-muted-foreground truncate">{person?.name ?? "Invited Talent"}</div>
+                                      {role?.roleTitle && (
+                                        <div className="text-[10px] text-muted-foreground truncate leading-none mt-1">{role.roleTitle}</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {isOwner && (
+                                    <button
+                                      onClick={() => runParticipantCommand("remove", participant)}
+                                      className="h-8 w-8 rounded-lg border border-border text-foreground hover:bg-muted/50 inline-flex items-center justify-center cursor-pointer transition-all shrink-0"
+                                      title="Cancel invitation and remove"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                </div>
                               </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="text-xs italic font-medium text-muted-foreground truncate">{person?.name ?? "Invited Talent"}</div>
-                                {role?.roleTitle && (
-                                  <div className="text-[10px] text-muted-foreground truncate leading-none mt-1">{role.roleTitle}</div>
-                                )}
-                              </div>
-                            </div>
-                            
-                            {/* Command action buttons for room owner */}
-                            {isOwner && (
-                              <div className="mt-2.5 grid grid-cols-3 gap-1.5 border-t border-border/20 pt-2 animate-fadeIn">
-                                <button
-                                  onClick={() => runParticipantCommand("interview", participant)}
-                                  disabled={!["joined", "accepted"].includes(participant.status)}
-                                  className="rounded-md border border-border/40 px-1.5 py-1 text-[9px] font-bold text-muted-foreground hover:text-foreground disabled:opacity-40 hover:bg-muted/40 cursor-pointer text-center"
-                                  title="Create interview"
-                                >
-                                  Interview
-                                </button>
-                                <button
-                                  onClick={() => openOfferForm(participant)}
-                                  disabled={!canSendOfferToParticipant(participant)}
-                                  className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-1.5 py-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40 cursor-pointer text-center"
-                                  title="Send offer after completed interview"
-                                >
-                                  Offer
-                                </button>
-                                <button
-                                  onClick={() => runParticipantCommand("remove", participant)}
-                                  className="rounded-md border border-rose-500/30 bg-rose-500/5 px-1.5 py-1 text-[9px] font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 cursor-pointer text-center"
-                                  title="Remove talent"
-                                >
-                                  Remove
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })
+                            );
+                          })
+                      )}
+                    </div>
                   )}
                 </div>
               </section>
@@ -2110,19 +2052,20 @@ export default function LiveRoomPage() {
                               </div>
 
                               <div className="space-y-2 pt-1">
-                                <button
+                                <Button
+                                  variant="outline"
                                   onClick={() => void openDocument(doc)}
                                   disabled={openingDoc === doc.docType}
-                                  className="w-full text-center text-xs font-bold border border-border/60 bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800/80 text-foreground py-2 rounded-lg transition-all duration-200 disabled:opacity-50 cursor-pointer shadow-sm hover:shadow active:scale-[0.98]"
+                                  className="w-full text-center text-xs font-bold py-2 rounded-lg transition-all duration-200 disabled:opacity-50 cursor-pointer shadow-sm hover:shadow h-9"
                                 >
                                   {openingDoc === doc.docType ? "Opening..." : "View Securely"}
-                                </button>
-                                <button
+                                </Button>
+                                <Button
                                   onClick={() => void downloadDocument(doc)}
-                                  className="w-full text-center text-xs font-bold border border-border/60 bg-[#7E8590] text-white hover:bg-[#6c727c] py-2 rounded-lg transition-all duration-200 inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-sm hover:shadow-md active:scale-[0.98]"
+                                  className="w-full text-center text-xs font-bold py-2 rounded-lg transition-all duration-200 inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-sm hover:shadow-md h-9"
                                 >
                                   <Download className="h-3.5 w-3.5" /> Download PDF
-                                </button>
+                                </Button>
                               </div>
                             </div>
                           )}
@@ -2130,13 +2073,14 @@ export default function LiveRoomPage() {
                       );
                     })}
 
-                    <button
+                    <Button
+                      variant="outline"
                       onClick={() => void downloadZip()}
-                      className="w-full text-xs font-bold rounded-lg border border-primary/25 text-primary bg-primary/5 px-3 py-2.5 hover:bg-primary/10 hover:shadow-sm active:scale-[0.98] transition-all duration-200 mt-2.5 cursor-pointer flex items-center justify-center gap-2"
+                      className="w-full text-xs font-bold rounded-lg px-3 py-2.5 active:scale-[0.98] transition-all duration-200 mt-2.5 cursor-pointer flex items-center justify-center gap-2 h-9"
                     >
                       <Download className="h-3.5 w-3.5" />
                       Download visible docs as ZIP
-                    </button>
+                    </Button>
                   </div>
                 )}
               </section>
@@ -2145,7 +2089,7 @@ export default function LiveRoomPage() {
         )}
       </div>
 
-      {docModal && <DocModal doc={docModal} onClose={() => setDocModal(null)} />}
+      {docModal && <DocModal doc={docModal} roomId={roomId} onClose={() => setDocModal(null)} />}
     </>
   );
 }

@@ -3,7 +3,7 @@ import { DehixSyncSchema, type DehixSyncMetadata, asDehixId, ensureDehixSync } f
 
 export interface IRoomChannel extends Document {
   roomId: Types.ObjectId;
-  type: "general" | "direct" | "interview";
+  type: "general" | "direct" | "interview" | "ai-agent";
   name: string;
   participantIds: Types.ObjectId[];
   roleId?: Types.ObjectId;
@@ -19,7 +19,7 @@ export interface IRoomChannel extends Document {
 const RoomChannelSchema = new Schema<IRoomChannel>(
   {
     roomId: { type: Schema.Types.ObjectId, ref: "LiveRoom", required: true, index: true },
-    type: { type: String, enum: ["general", "direct", "interview"], required: true },
+    type: { type: String, enum: ["general", "direct", "interview", "ai-agent"], required: true },
     name: { type: String, required: true },
     participantIds: [{ type: Schema.Types.ObjectId, ref: "User" }],
     roleId: { type: Schema.Types.ObjectId, ref: "RoomRole" },
