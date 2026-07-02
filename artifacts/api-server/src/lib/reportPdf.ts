@@ -54,7 +54,7 @@ function ensurePuppeteerCacheDir() {
 
 function resolveChromeExecutablePath(puppeteer: PuppeteerModule["default"]): string | undefined {
   const configuredPath = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
-  if (configuredPath) return configuredPath;
+  if (configuredPath && existsSync(configuredPath)) return configuredPath;
 
   if (process.env.LOCALAPPDATA) {
     const userChrome = path.join(process.env.LOCALAPPDATA, "Google\\Chrome\\Application\\chrome.exe");

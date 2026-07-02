@@ -65,6 +65,10 @@ import {
 
 const router = Router();
 
+function createdAtMs(value: { createdAt?: Date | string | number }): number {
+  return new Date(value.createdAt ?? 0).getTime();
+}
+
 function normalizeGoogleMeetLink(value: unknown): string | null {
   const raw = typeof value === "string" ? value.trim() : "";
   if (!raw) return null;
@@ -162,9 +166,10 @@ function commandHelpSummary() {
     "Available commands:",
     "/interview @name - create or open an interview channel",
     "/interview @name @name2 - create or open a multi-talent interview channel",
+    "/add @name - add talent to the current custom or interview channel",
     "/meet <meet.google.com link> - share a real Google Meet link in this interview",
     "/hire @name - mark a talent as hired after confirmation",
-    "/remove @name - remove a talent after confirmation",
+    "/remove @name - remove from the room in general, or only from the current custom/interview channel",
     "/help - show this command list",
   ].join("\n");
 }
@@ -271,6 +276,103 @@ async function notifyInterviewParticipants(
       payload: { channelId: String(channel._id) },
     })
   ));
+}
+
+function cleanChannelName(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9 _-]+/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, 48);
+}
+
+function channelTalentIds(room: InstanceType<typeof LiveRoom>, channel: InstanceType<typeof RoomChannel>): string[] {
+  return channel.participantIds.map(String).filter((id) => id !== String(room.businessId));
+}
+
+function channelAllowsTalentManagement(channel: InstanceType<typeof RoomChannel>): boolean {
+  return channel.type === "custom" || channel.type === "interview";
+}
+
+function emitChannelUpdated(room: InstanceType<typeof LiveRoom>, channel: InstanceType<typeof RoomChannel>) {
+  const io = getIo();
+  io?.to(`room:${room._id}`).emit("room:channel_updated", { roomId: room._id, channel: formatRoomChannel(channel) });
+  if (channel.type === "interview") {
+    io?.to(`room:${room._id}`).emit("room:interview_updated", { roomId: room._id, channel: formatRoomChannel(channel) });
+  }
+}
+
+async function resolveChannelParticipants(roomId: any, participantIds: unknown): Promise<any[]> {
+  if (!Array.isArray(participantIds)) return [];
+  const ids = [...new Set(participantIds.map(String).filter(Boolean))];
+  if (ids.length === 0) return [];
+  return RoomParticipant.find({
+    _id: { $in: ids },
+    roomId,
+    status: { $in: ["invited", "joined", "accepted"] },
+  }).populate("userId", "name email");
+}
+
+async function addTalentToChannel(
+  room: InstanceType<typeof LiveRoom>,
+  channel: InstanceType<typeof RoomChannel>,
+  targets: any[]
+) {
+  if (!channelAllowsTalentManagement(channel)) return channel;
+  const currentIds = new Set(channel.participantIds.map(String));
+  currentIds.add(String(room.businessId));
+  for (const target of targets) {
+    currentIds.add(String(target.talentId));
+  }
+  channel.participantIds = [...currentIds] as any;
+  if (channel.type === "interview" && channel.interviewStatus === "cancelled") {
+    channel.interviewStatus = "scheduled";
+  }
+  await channel.save();
+  if (targets.length > 0) {
+    await postSystemMessage(room, `${targets.map((target) => target.name).join(", ")} added to this channel`, channel._id);
+    await Promise.all(targets.map((target) =>
+      notifyTalent({
+        room,
+        talentId: target.talentId,
+        title: channel.type === "interview" ? "Added to interview channel" : "Added to channel",
+        message: `${room.title}: you were added to ${formatRoomChannel(channel).displayName}.`,
+        event: "talent:channel_added",
+        payload: { channelId: String(channel._id) },
+      })
+    ));
+  }
+  emitChannelUpdated(room, channel);
+  return channel;
+}
+
+async function removeTalentFromChannel(
+  room: InstanceType<typeof LiveRoom>,
+  channel: InstanceType<typeof RoomChannel>,
+  target: any
+) {
+  if (!channelAllowsTalentManagement(channel)) return channel;
+  const nextIds = channel.participantIds.map(String).filter((id) => id !== String(target.talentId));
+  if (!nextIds.includes(String(room.businessId))) nextIds.unshift(String(room.businessId));
+  channel.participantIds = nextIds as any;
+  if (channel.type === "interview" && channelTalentIds(room, channel).length === 0) {
+    channel.interviewStatus = "cancelled";
+  }
+  await channel.save();
+  await postSystemMessage(room, `${target.name} removed from this channel`, channel._id);
+  await notifyTalent({
+    room,
+    talentId: target.talentId,
+    title: channel.type === "interview" ? "Removed from interview channel" : "Removed from channel",
+    message: `${room.title}: your access to ${formatRoomChannel(channel).displayName} was removed.`,
+    event: "talent:channel_removed",
+    payload: { channelId: String(channel._id) },
+  });
+  emitChannelUpdated(room, channel);
+  return channel;
 }
 
 async function resolveCommandTargets(roomId: string, queries: string[]) {
@@ -517,15 +619,16 @@ router.get("/my", requireAuth, async (req: AuthRequest, res) => {
   try {
     let rooms;
     if (req.userRole === "business") {
-      rooms = await LiveRoom.find({ businessId: req.userId }).sort({ createdAt: -1 });
+      rooms = await LiveRoom.find({ businessId: req.userId });
     } else {
       const participations = await RoomParticipant.find({
         userId: req.userId,
         status: { $in: ["joined", "accepted"] },
       }).select("roomId");
       const roomIds = participations.map((p) => p.roomId);
-      rooms = await LiveRoom.find({ _id: { $in: roomIds } }).sort({ createdAt: -1 });
+      rooms = await LiveRoom.find({ _id: { $in: roomIds } });
     }
+    rooms.sort((a, b) => createdAtMs(b) - createdAtMs(a));
     const roomIds = rooms.map((r) => r._id);
     const [participantCounts, ticketCounts, milestoneCounts] = await Promise.all([
       RoomParticipant.aggregate([
@@ -747,8 +850,9 @@ router.get("/:id/workspace", requireAuth, requireRoomAccess, async (req: AuthReq
         isRoomOwner(room, req.userId)
           ? { roomId: room._id }
           : { roomId: room._id, freelancerId: req.userId }
-      ).sort({ createdAt: -1 }),
+      ),
     ]);
+    offers.sort((a, b) => createdAtMs(b) - createdAtMs(a));
     const currentParticipant = await RoomParticipant.findOne({
       roomId: room._id,
       userId: req.userId,
@@ -781,6 +885,81 @@ router.get("/:id/workspace", requireAuth, requireRoomAccess, async (req: AuthReq
   }
 });
 
+router.post("/:id/channels", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const room = await LiveRoom.findById(req.params["id"]);
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    const name = cleanChannelName(req.body?.name);
+    if (!name) {
+      res.status(400).json({ error: "Channel name is required" });
+      return;
+    }
+    const existing = await RoomChannel.findOne({ roomId: room._id, type: "custom", name });
+    if (existing) {
+      res.status(409).json({ error: "A custom channel with this name already exists" });
+      return;
+    }
+    const participants = await resolveChannelParticipants(room._id, req.body?.participantIds);
+    const talentIds = participants.map((participant: any) => String(participant.userId?._id ?? participant.userId));
+    const channel = await RoomChannel.create({
+      roomId: room._id,
+      type: "custom",
+      name,
+      participantIds: [String(room.businessId), ...talentIds],
+    });
+    await postSystemMessage(room, `Channel #${name} created`, channel._id);
+    getIo()?.to(`room:${room._id}`).emit("room:channel_created", formatRoomChannel(channel, name));
+    res.status(201).json(formatRoomChannel(channel, name));
+  } catch (err) {
+    req.log.error({ err }, "createCustomChannel error");
+    res.status(500).json({ error: "Failed to create channel" });
+  }
+});
+
+router.patch("/:id/channels/:channelId", requireAuth, requireRoomOwner, async (req: AuthRequest, res) => {
+  try {
+    const [room, channel] = await Promise.all([
+      LiveRoom.findById(req.params["id"]),
+      RoomChannel.findOne({ _id: req.params["channelId"], roomId: req.params["id"], type: "custom" }),
+    ]);
+    if (!room || !channel) {
+      res.status(404).json({ error: "Custom channel not found" });
+      return;
+    }
+
+    if (req.body?.name !== undefined) {
+      const name = cleanChannelName(req.body.name);
+      if (!name) {
+        res.status(400).json({ error: "Channel name is required" });
+        return;
+      }
+      const duplicate = await RoomChannel.findOne({ roomId: room._id, type: "custom", name, _id: { $ne: channel._id } });
+      if (duplicate) {
+        res.status(409).json({ error: "A custom channel with this name already exists" });
+        return;
+      }
+      channel.name = name;
+    }
+
+    if (Array.isArray(req.body?.participantIds)) {
+      const participants = await resolveChannelParticipants(room._id, req.body.participantIds);
+      const talentIds = participants.map((participant: any) => String(participant.userId?._id ?? participant.userId));
+      channel.participantIds = [String(room.businessId), ...talentIds] as any;
+    }
+
+    await channel.save();
+    await postSystemMessage(room, `Channel #${channel.name} updated`, channel._id);
+    emitChannelUpdated(room, channel);
+    res.json(formatRoomChannel(channel, channel.name));
+  } catch (err) {
+    req.log.error({ err }, "updateCustomChannel error");
+    res.status(500).json({ error: "Failed to update channel" });
+  }
+});
+
 router.get("/:id/channels/:channelId/messages", requireAuth, requireRoomAccess, async (req: AuthRequest, res) => {
   try {
     const room = await LiveRoom.findById(req.params["id"]);
@@ -794,10 +973,10 @@ router.get("/:id/channels/:channelId/messages", requireAuth, requireRoomAccess, 
       return;
     }
     const limit = Math.max(20, Math.min(200, Number(req.query["limit"] ?? 120)));
-    const messages = await RoomMessage.find({ roomId: room._id, channelId: channel._id })
-      .sort({ createdAt: -1 })
-      .limit(limit);
-    res.json(messages.reverse().map(formatRoomMessage));
+    const messages = await RoomMessage.find({ roomId: room._id, channelId: channel._id });
+    messages.sort((a, b) => createdAtMs(b) - createdAtMs(a));
+    const limitedMessages = messages.slice(0, limit);
+    res.json(limitedMessages.reverse().map(formatRoomMessage));
   } catch (err) {
     req.log.error({ err }, "getChannelMessages error");
     res.status(500).json({ error: "Failed to load messages" });
@@ -836,7 +1015,7 @@ router.post("/:id/channels/:channelId/messages", requireAuth, requireRoomAccess,
     if (channel.type === "general") {
       await notifyMentionedTalents(room, messageText, req.userId!, saved);
     }
-    const aiMessage = messageMentionsDehixAi(messageText)
+    const aiMessage = channel.type === "ai" || messageMentionsDehixAi(messageText)
       ? await createPermissionAwareAiReply(room, channel, req.userId!, messageText, io)
       : null;
     res.status(201).json({
@@ -913,8 +1092,17 @@ router.post("/:id/commands/preview", requireAuth, requireRoomAccess, async (req:
       return;
     }
 
-    if (!["remove", "hire", "interview"].includes(parsed.action)) {
+    if (!["add", "remove", "hire", "interview"].includes(parsed.action)) {
       res.status(400).json({ error: "Unknown command. Try /help." });
+      return;
+    }
+
+    if (parsed.action === "add" && !channelAllowsTalentManagement(channel)) {
+      res.status(400).json({ error: "/add can only be used inside interview or custom channels" });
+      return;
+    }
+    if (parsed.action === "remove" && channel.type !== "general" && !channelAllowsTalentManagement(channel)) {
+      res.status(400).json({ error: "/remove can be used in general, interview, or custom channels" });
       return;
     }
 
@@ -932,7 +1120,7 @@ router.post("/:id/commands/preview", requireAuth, requireRoomAccess, async (req:
       });
       return;
     }
-    if (parsed.action !== "interview" && resolved.resolved.length !== 1) {
+    if (!["add", "interview"].includes(parsed.action) && resolved.resolved.length !== 1) {
       res.status(400).json({ error: `/${parsed.action} expects exactly one talent` });
       return;
     }
@@ -942,22 +1130,30 @@ router.post("/:id/commands/preview", requireAuth, requireRoomAccess, async (req:
     }
 
     const targets = resolved.resolved.map(({ participant, ...target }) => target);
+    const removeScope = parsed.action === "remove" && channelAllowsTalentManagement(channel) ? "channel" : "room";
     const actionLabel = parsed.action === "hire"
       ? `Mark ${targets[0]?.name} as hired`
       : parsed.action === "remove"
-        ? `Remove ${targets[0]?.name} from the room`
-        : `Create or open interview channel for ${targets.map((target) => target.name).join(", ")}`;
+        ? removeScope === "channel"
+          ? `Remove ${targets[0]?.name} from this channel only`
+          : `Remove ${targets[0]?.name} from the LiveRoom`
+        : parsed.action === "add"
+          ? `Add ${targets.map((target) => target.name).join(", ")} to this channel`
+          : `Create or open interview channel for ${targets.map((target) => target.name).join(", ")}`;
     res.json({
       commandId: nanoid(10),
       action: parsed.action,
       summary: actionLabel,
       targets,
-      warnings: parsed.action === "remove" ? ["This talent will lose access to room channels."] : [],
+      warnings: parsed.action === "remove"
+        ? [removeScope === "channel" ? "This only removes channel access." : "This talent will lose access to the LiveRoom."]
+        : [],
       requiresConfirmation: true,
       payload: {
         channelId: String(channel._id),
         participantIds: targets.map((target) => target.participantId),
         roleId: targets[0]?.roleId ?? null,
+        removeScope,
       },
     });
   } catch (err) {
@@ -1045,9 +1241,28 @@ router.post("/:id/commands/execute", requireAuth, requireRoomAccess, async (req:
         res.status(400).json({ error: "/remove expects exactly one talent" });
         return;
       }
-      await removeTalentFromRoom(room, targets[0], req.userId!);
+      if ((payload as any).removeScope === "channel") {
+        if (!channel || !channelAllowsTalentManagement(channel)) {
+          res.status(400).json({ error: "/remove can only remove channel access inside interview or custom channels" });
+          return;
+        }
+        await removeTalentFromChannel(room, channel, targets[0]);
+      } else {
+        await removeTalentFromRoom(room, targets[0], req.userId!);
+      }
       getIo()?.to(`room:${room._id}`).emit("room:command_executed", { roomId: room._id, action });
       res.json({ action, message: "Talent removed" });
+      return;
+    }
+
+    if (action === "add") {
+      if (!channel || !channelAllowsTalentManagement(channel)) {
+        res.status(400).json({ error: "/add can only be used inside interview or custom channels" });
+        return;
+      }
+      const channelResult = await addTalentToChannel(room, channel, targets);
+      getIo()?.to(`room:${room._id}`).emit("room:command_executed", { roomId: room._id, action });
+      res.json({ action, channel: formatRoomChannel(channelResult) });
       return;
     }
 
@@ -1992,6 +2207,8 @@ async function formatWorkspaceChannels(room: InstanceType<typeof LiveRoom>, chan
   return channels.map((channel) => {
     const formatted = (() => {
     if (channel.type === "general") return formatRoomChannel(channel, "general");
+    if (channel.type === "ai") return formatRoomChannel(channel, "DEHIX AI");
+    if (channel.type === "custom") return formatRoomChannel(channel, channel.name);
     if (channel.type === "interview") {
       const talentNames = channel.participantIds
         .map(String)
@@ -2088,15 +2305,17 @@ async function buildPermissionAwareAiContext(
   userId: string
 ): Promise<string> {
   const owner = isRoomOwner(room, userId);
-  const visibleChannels = owner ? await RoomChannel.find({ roomId: room._id }) : await getVisibleChannels(room, userId);
-  const visibleChannelIds = visibleChannels.map((visibleChannel) => visibleChannel._id);
   const [messages, generatedDocs] = await Promise.all([
-    RoomMessage.find({ roomId: room._id, channelId: { $in: visibleChannelIds } }).sort({ createdAt: 1 }).limit(200),
-    GeneratedDoc.find({ roomId: room._id }).sort({ createdAt: -1 }),
+    RoomMessage.find({ roomId: room._id, channelId: channel._id }),
+    GeneratedDoc.find({ roomId: room._id }),
   ]);
-  const visibleConversation = messages
+  messages.sort((a, b) => createdAtMs(a) - createdAtMs(b));
+  generatedDocs.sort((a, b) => createdAtMs(b) - createdAtMs(a));
+  const activeChannelConversation = messages
+    .slice(-200)
     .map((message) => `${message.type === "ai" ? "DEHIX AI" : message.senderName}: ${message.message}`)
     .join("\n");
+  const channelMemberContext = await buildChannelMemberContext(room, channel);
 
   if (owner) {
     const session = await findLaunchSessionForRoom(room);
@@ -2106,10 +2325,11 @@ async function buildPermissionAwareAiContext(
     return [
       "Current user: business owner. Full room context is allowed.",
       `Active channel: ${channel.name}`,
+      channel.type === "ai" ? "This is the business owner's private DEHIX AI channel." : channelMemberContext,
       launchContext,
       roomContext,
       `Generated documents:\n${docs || "No generated documents yet."}`,
-      `Visible room conversations:\n${visibleConversation || "No messages yet."}`,
+      `Active channel conversation only:\n${activeChannelConversation || "No messages yet."}`,
     ].join("\n\n");
   }
 
@@ -2123,11 +2343,26 @@ async function buildPermissionAwareAiContext(
     "Current user: invited talent. Context is permission-filtered.",
     `Room title: ${room.title}`,
     `Room status: ${room.status}`,
+    channel.type === "ai" ? "This is the current talent's private DEHIX AI channel." : channelMemberContext,
     `Talent role:\n${role ? safeJson(formatRole(role), 2000) : "No role assigned."}`,
     `Assigned tickets:\n${safeJson(tickets.map(formatTicket), 5000)}`,
     `Allowed documents:\n${allowedDocs || "No documents have been granted by the business yet."}`,
-    `Visible room conversations:\n${visibleConversation || "No messages yet."}`,
+    `Active channel conversation only:\n${activeChannelConversation || "No messages yet."}`,
   ].join("\n\n");
+}
+
+async function buildChannelMemberContext(
+  room: InstanceType<typeof LiveRoom>,
+  channel: InstanceType<typeof RoomChannel>
+): Promise<string> {
+  if (channel.type === "general") return "Active channel: general room chat.";
+  const memberIds = channel.participantIds.map(String);
+  const users = memberIds.length > 0 ? await User.find({ _id: { $in: memberIds } }).select("name email role") : [];
+  return `Active channel members:\n${safeJson(users.map((user: any) => ({
+    name: user.name,
+    email: user.email,
+    role: String(user._id) === String(room.businessId) ? "business" : user.role,
+  })), 3000)}`;
 }
 
 async function buildAllowedDocumentContext(room: InstanceType<typeof LiveRoom>, userId: string): Promise<string> {

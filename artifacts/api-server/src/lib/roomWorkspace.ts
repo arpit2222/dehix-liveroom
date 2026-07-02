@@ -14,8 +14,13 @@ type ParticipantDoc = InstanceType<typeof RoomParticipant>;
 type ChannelDoc = InstanceType<typeof RoomChannel>;
 type MessageDoc = InstanceType<typeof RoomMessage>;
 
+function createdAtMs(value: { createdAt?: Date | string | number }): number {
+  return new Date(value.createdAt ?? 0).getTime();
+}
+
 export const ROOM_MEMBER_STATUSES = ["joined", "accepted"] as const;
 export const ROOM_INTERVIEW_ELIGIBLE_STATUSES = ["invited", "joined", "accepted"] as const;
+export const ROOM_CHANNEL_ELIGIBLE_STATUSES = ["invited", "joined", "accepted"] as const;
 
 export const STANDARD_ROOM_DOCUMENTS = [
   { docType: "business_validation", title: "Business Validation", source: "standard" },
@@ -73,6 +78,22 @@ export async function ensureDirectChannelForParticipant(room: RoomDoc, participa
   });
 }
 
+export async function ensurePersonalAiChannel(room: RoomDoc, userId: string | Types.ObjectId): Promise<ChannelDoc> {
+  const name = `ai:${String(userId)}`;
+  const participantIds = [userId as Types.ObjectId];
+  const existing = await RoomChannel.findOne({ roomId: room._id, type: "ai", name });
+  if (existing) {
+    existing.set({ participantIds });
+    return existing.save();
+  }
+  return RoomChannel.create({
+    roomId: room._id,
+    type: "ai",
+    name,
+    participantIds,
+  });
+}
+
 export async function ensureInterviewChannelForParticipants({
   room,
   participants,
@@ -122,12 +143,13 @@ export async function ensureAIAgentChannel(room: RoomDoc): Promise<ChannelDoc> {
 
 export async function ensureWorkspaceChannels(room: RoomDoc): Promise<void> {
   await ensureGeneralChannel(room._id);
+  await ensurePersonalAiChannel(room, room.businessId);
   await ensureAIAgentChannel(room);
   const participants = await RoomParticipant.find({
     roomId: room._id,
-    status: { $in: ROOM_MEMBER_STATUSES },
+    status: { $in: ROOM_CHANNEL_ELIGIBLE_STATUSES },
   });
-  await Promise.all(participants.map((participant) => ensureDirectChannelForParticipant(room, participant)));
+  await Promise.all(participants.map((participant) => ensurePersonalAiChannel(room, participant.userId)));
 }
 
 export async function createTalentJoinedSystemMessage(room: RoomDoc, participant: ParticipantDoc, io?: Server | null): Promise<MessageDoc | null> {
@@ -164,6 +186,7 @@ export async function createTalentJoinedSystemMessage(room: RoomDoc, participant
 
 export async function userCanAccessChannel(room: RoomDoc, channel: ChannelDoc, userId: string | undefined): Promise<boolean> {
   if (!userId) return false;
+  if (channel.type === "ai") return channel.participantIds.map(String).includes(userId);
   if (isRoomOwner(room, userId)) return true;
   const participant = await getActiveParticipant(room._id, userId);
   if (!participant) return false;
@@ -173,8 +196,11 @@ export async function userCanAccessChannel(room: RoomDoc, channel: ChannelDoc, u
 
 export async function getVisibleChannels(room: RoomDoc, userId: string): Promise<ChannelDoc[]> {
   await ensureWorkspaceChannels(room);
-  const channels = await RoomChannel.find({ roomId: room._id }).sort({ type: 1, createdAt: 1 });
-  if (isRoomOwner(room, userId)) return channels;
+  const channels = await RoomChannel.find({ roomId: room._id });
+  channels.sort((a, b) => String(a.type).localeCompare(String(b.type)) || createdAtMs(a) - createdAtMs(b));
+  if (isRoomOwner(room, userId)) {
+    return channels.filter((channel) => channel.type !== "ai" || channel.participantIds.map(String).includes(userId));
+  }
   const participant = await getActiveParticipant(room._id, userId);
   if (!participant) return [];
   return channels.filter((channel) => channel.type === "general" || channel.participantIds.map(String).includes(userId));
@@ -197,9 +223,10 @@ export async function userCanViewRoomDocument(room: RoomDoc, userId: string | un
 export async function getRoomDocumentCatalog(room: RoomDoc, userId: string) {
   const isOwner = isRoomOwner(room, userId);
   const [generatedDocs, permissions] = await Promise.all([
-    GeneratedDoc.find({ roomId: room._id }).sort({ createdAt: -1 }),
+    GeneratedDoc.find({ roomId: room._id }),
     RoomDocumentPermission.find({ roomId: room._id }),
   ]);
+  generatedDocs.sort((a, b) => createdAtMs(b) - createdAtMs(a));
   const allowedDocTypes = new Set(
     permissions
       .filter((permission) => String(permission.talentId) === userId && permission.canView)
@@ -263,7 +290,7 @@ export function formatRoomChannel(channel: ChannelDoc, displayName?: string) {
     roomId: channel.roomId,
     type: channel.type,
     name: channel.name,
-    displayName: displayName ?? (channel.type === "general" ? "general" : "Direct message"),
+    displayName: displayName ?? (channel.type === "general" ? "general" : channel.type === "ai" ? "Personal AI" : channel.name),
     participantIds: channel.participantIds,
     roleId: channel.roleId ?? null,
     interviewStatus: channel.interviewStatus ?? null,

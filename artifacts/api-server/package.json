@@ -9,6 +9,7 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "seed": "node --enable-source-maps ./dist/seed.mjs",
+    "auth:diagnose": "node ./build.mjs && node --enable-source-maps ./dist/scripts/authDiagnostics.mjs",
     "sync:dehix-fields": "node ./build.mjs && node --enable-source-maps ./dist/scripts/backfillDehixSyncFields.mjs"
   },
   "dependencies": {
