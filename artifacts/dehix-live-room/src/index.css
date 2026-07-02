@@ -211,4 +211,23 @@
     @apply bg-gradient-to-bl from-background/0 via-primary/5 to-primary/10;
   }
 
+  .back-to-top-chat-open {
+    right: 1.5rem;
+    bottom: 7rem;
+  }
+
+  @media (min-width: 1024px) {
+    .back-to-top-chat-open {
+      right: 400px;
+      bottom: 7rem;
+    }
+  }
+
+  @media (min-width: 1400px) {
+    .back-to-top-chat-open {
+      right: calc(50vw - 300px);
+      bottom: 7rem;
+    }
+  }
 }
+

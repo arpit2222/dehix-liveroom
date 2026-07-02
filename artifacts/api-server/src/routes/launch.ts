@@ -131,12 +131,16 @@ function formatBusinessValidationLines(analysis: any): Array<{ text: string; siz
     { text: `Market Demand: ${research?.market_demand ?? "Not available"}` },
     { text: `Target Audience: ${research?.target_audience ?? "Not available"}` },
     { text: `Competitor Analysis: ${research?.competitor_analysis ?? "Not available"}` },
-    { text: `Competitive Moat: ${research?.competitive_moat ?? "Not available"}`, gapAfter: 14 },
+    { text: `Competitive Moat: ${research?.competitive_moat ?? "Not available"}` },
+    { text: `TAM (Total Addressable Market): ${research?.market_size_tam ?? "Not available"}` },
+    { text: `SAM (Serviceable Addressable Market): ${research?.market_size_sam ?? "Not available"}` },
+    { text: `SOM (Serviceable Obtainable Market): ${research?.market_size_som ?? "Not available"}`, gapAfter: 14 },
     { text: "Business Model", size: 15, gapAfter: 6 },
     { text: `Revenue Model: ${research?.revenue_model ?? "Not available"}` },
     { text: `Unit Economics: ${research?.unit_economics ?? "Not available"}` },
     { text: `Cost Estimation: ${research?.cost_estimation ?? "Not available"}` },
-    { text: `Go To Market: ${research?.go_to_market_strategy ?? "Not available"}`, gapAfter: 14 },
+    { text: `Go To Market: ${research?.go_to_market_strategy ?? "Not available"}` },
+    { text: `Pricing & Tiering Strategy: ${research?.pricing_strategy ?? "Not available"}`, gapAfter: 14 },
     { text: "Scores", size: 15, gapAfter: 6 },
     { text: `Market Opportunity: ${scores?.market_opportunity ?? "N/A"} / 10` },
     { text: `Problem Clarity: ${scores?.problem_clarity ?? "N/A"} / 10` },
@@ -836,10 +840,14 @@ Return this exact JSON structure:
     "target_audience": "string",
     "competitor_analysis": "string",
     "competitive_moat": "string",
+    "market_size_tam": "string detailing the Total Addressable Market (TAM) with estimated figures",
+    "market_size_sam": "string detailing the Serviceable Addressable Market (SAM) with estimated figures",
+    "market_size_som": "string detailing the Serviceable Obtainable Market (SOM) with estimated figures",
     "revenue_model": "string",
     "unit_economics": "string",
     "cost_estimation": "string",
     "go_to_market_strategy": "string",
+    "pricing_strategy": "string detailing the suggested pricing strategy and tiering options",
     "risks": ["3 to 6 specific risks"],
     "suggestions": ["3 to 6 actionable suggestions"],
     "assumptions": ["string"],
@@ -1150,6 +1158,7 @@ Critical rules:
 - Recommend MVP-first development.
 - Avoid overengineering.
 - Explain business reasoning and technical reasoning separately.
+- For development_roadmap.phase_1_discovery.deliverables, include detailed discovery deliverables: User Persona & Empathy Mapping, Competitor Benchmarking Matrix, Initial Technical Feasibility Study, and Regulatory Risk Assessment.
 - Return ONLY valid JSON. No markdown, no intro text.`;
 
     const userPrompt = `Mandatory inputs:
