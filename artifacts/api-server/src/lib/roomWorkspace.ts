@@ -130,21 +130,9 @@ export async function ensureInterviewChannelForParticipants({
   });
 }
 
-export async function ensureAIAgentChannel(room: RoomDoc): Promise<ChannelDoc> {
-  const existing = await RoomChannel.findOne({ roomId: room._id, type: "ai-agent", name: "ai-agent" });
-  if (existing) return existing;
-  return RoomChannel.create({
-    roomId: room._id,
-    type: "ai-agent",
-    name: "ai-agent",
-    participantIds: [room.businessId],
-  });
-}
-
 export async function ensureWorkspaceChannels(room: RoomDoc): Promise<void> {
   await ensureGeneralChannel(room._id);
   await ensurePersonalAiChannel(room, room.businessId);
-  await ensureAIAgentChannel(room);
   const participants = await RoomParticipant.find({
     roomId: room._id,
     status: { $in: ROOM_CHANNEL_ELIGIBLE_STATUSES },

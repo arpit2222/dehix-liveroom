@@ -31,7 +31,7 @@ import {
 
 type Channel = {
   _id: string;
-  type: "general" | "direct" | "interview";
+  type: "general" | "direct" | "interview" | "custom" | "ai";
   name: string;
   displayName: string;
   participantIds: string[];
@@ -272,7 +272,7 @@ export default function LiveRoomPage() {
   const sortedChannels = useMemo(() => {
     if (!workspace?.channels) return [];
     return [...workspace.channels].sort((a, b) => {
-      // 1. Group check: non-direct (general/ai-agent/interview) channels come before direct messages
+      // 1. Group check: non-direct (general/interview) channels come before direct messages
       const aIsGeneral = a.type !== "direct";
       const bIsGeneral = b.type !== "direct";
       if (aIsGeneral !== bIsGeneral) {
@@ -282,12 +282,12 @@ export default function LiveRoomPage() {
       // 2. Sorting within their respective groups
       if (aIsGeneral) {
         // "general" is first
-        if (a.name === "general") return -1;
-        if (b.name === "general") return 1;
+        if (a.type === "general") return -1;
+        if (b.type === "general") return 1;
         
-        // "ai-agent" is second
-        if (a.name === "ai-agent") return -1;
-        if (b.name === "ai-agent") return 1;
+        // "ai" is second
+        if (a.type === "ai") return -1;
+        if (b.type === "ai") return 1;
         
         // Others sorted alphabetically by displayName
         return a.displayName.localeCompare(b.displayName);
@@ -308,7 +308,11 @@ export default function LiveRoomPage() {
   }, [workspace?.permissionMatrix, accessSearch]);
 
   const regularChannels = useMemo(
-    () => sortedChannels.filter((channel) => channel.type !== "interview" && channel.type !== "direct") ?? [],
+    () => sortedChannels.filter((channel) => channel.type !== "interview" && channel.type !== "direct" && channel.type !== "ai") ?? [],
+    [sortedChannels]
+  );
+  const aiChannels = useMemo(
+    () => sortedChannels.filter((channel) => channel.type === "ai") ?? [],
     [sortedChannels]
   );
   const interviewChannels = useMemo(
@@ -1143,12 +1147,35 @@ export default function LiveRoomPage() {
                             : "text-muted-foreground hover:text-foreground hover:bg-muted/45 border border-transparent"
                         }`}
                       >
-                        {channel.name === "ai-agent" ? <Bot className="h-3.5 w-3.5 text-primary" /> : <Hash className="h-3.5 w-3.5" />}
+                        {channel.type === "ai" ? <Bot className="h-3.5 w-3.5 text-primary" /> : <Hash className="h-3.5 w-3.5" />}
                         <span className="truncate font-semibold">{channel.displayName}</span>
                       </button>
                     ))}
                   </div>
                 </div>
+
+                {/* AI Channels Group */}
+                {aiChannels.length > 0 && (
+                  <div>
+                    <PanelHeader icon={<Bot className="h-3.5 w-3.5" />} label="Personal AI" count={aiChannels.length} />
+                    <div className="space-y-1 mt-1.5">
+                      {aiChannels.map((channel) => (
+                        <button
+                          key={channel._id}
+                          onClick={() => setSelectedChannelId(channel._id)}
+                          className={`w-full flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-all ${
+                            selectedChannelId === channel._id
+                              ? "bg-primary/12 text-primary border border-primary/20 shadow-sm"
+                              : "text-muted-foreground hover:text-foreground hover:bg-muted/45 border border-transparent"
+                          }`}
+                        >
+                          <Bot className="h-3.5 w-3.5 text-primary" />
+                          <span className="truncate font-semibold uppercase">{channel.displayName || "DEHIX AI"}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Interview Channels Group */}
                 {interviewChannels.length > 0 && (
@@ -1231,7 +1258,7 @@ export default function LiveRoomPage() {
         <main className="flex-1 min-w-0 flex flex-col bg-white dark:bg-card border border-border/40 rounded-[24px] my-3 mx-2 shadow-sm overflow-hidden">
             <header className="h-16 shrink-0 border-b border-border/30 px-5 flex items-center justify-between gap-3 bg-background/75 relative z-10">
               <div className="flex items-center gap-3.5 min-w-0">
-                {selectedChannel?.name === "ai-agent" ? (
+                {selectedChannel?.type === "ai" ? (
                   <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
                     <Bot className="h-4 w-4" />
                   </div>
@@ -1264,7 +1291,7 @@ export default function LiveRoomPage() {
                     )}
                   </div>
                   <div className="text-[10px] text-muted-foreground truncate leading-none mt-0.5">
-                    {selectedChannel?.name === "ai-agent"
+                    {selectedChannel?.type === "ai"
                       ? "Dedicated AI Assistant. Type your queries directly; no need to use @dehixai."
                       : selectedChannel?.type === "general"
                         ? "General chat. Mention @dehixai when you want AI to participate."
@@ -1545,10 +1572,10 @@ export default function LiveRoomPage() {
                   
                   <div className="space-y-2">
                     <h3 className="text-lg font-bold tracking-tight text-foreground">
-                      {selectedChannel?.name === "ai-agent" ? "Welcome to your AI Agent Chat" : "Welcome to the Workspace Chat"}
+                      {selectedChannel?.type === "ai" ? "Welcome to your personal DEHIX AI" : "Welcome to the Workspace Chat"}
                     </h3>
                     <p className="text-xs text-muted-foreground/80 leading-relaxed">
-                      {selectedChannel?.name === "ai-agent"
+                      {selectedChannel?.type === "ai"
                         ? "Ask anything about the project validation, blueprints, features, roadmap, and technologies. The AI will assist you instantly."
                         : "Start a conversation with your team or call @dehixai for permission-aware AI assistance with project tasks, contracts, or milestones."}
                     </p>
@@ -1558,9 +1585,9 @@ export default function LiveRoomPage() {
                     <div className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest text-center">Suggested Prompt Actions</div>
                     <div className="flex flex-wrap gap-2 justify-center">
                       {[
-                        { label: "Analyze project scope", text: selectedChannel?.name === "ai-agent" ? "what is the core scope of this project?" : "@dehixai what is the core scope of this project?" },
-                        { label: "Check required documents", text: selectedChannel?.name === "ai-agent" ? "which documents are pending for my role?" : "@dehixai which documents are pending for my role?" },
-                        { label: "Generate team milestones", text: selectedChannel?.name === "ai-agent" ? "can you outline the main milestones for our roles?" : "@dehixai can you outline the main milestones for our roles?" }
+                        { label: "Analyze project scope", text: selectedChannel?.type === "ai" ? "what is the core scope of this project?" : "@dehixai what is the core scope of this project?" },
+                        { label: "Check required documents", text: selectedChannel?.type === "ai" ? "which documents are pending for my role?" : "@dehixai which documents are pending for my role?" },
+                        { label: "Generate team milestones", text: selectedChannel?.type === "ai" ? "can you outline the main milestones for our roles?" : "@dehixai can you outline the main milestones for our roles?" }
                       ].map((chip, idx) => (
                         <button
                           key={idx}
@@ -1583,7 +1610,7 @@ export default function LiveRoomPage() {
               )}
               
               {/* AI thinking loader animation */}
-              {sending && (lastSentText.toLowerCase().includes("@dehixai") || selectedChannel?.name === "ai-agent") && (
+              {sending && (lastSentText.toLowerCase().includes("@dehixai") || selectedChannel?.type === "ai") && (
                 <div className="flex gap-3 my-4 flex-row animate-pulse">
                   <div className="shrink-0 self-end mb-1">
                     <div className="h-8 w-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shadow-sm shrink-0">
@@ -1681,7 +1708,7 @@ export default function LiveRoomPage() {
                   }}
                   rows={2}
                   placeholder={
-                    selectedChannel?.name === "ai-agent"
+                    selectedChannel?.type === "ai"
                       ? "Ask the AI Agent anything..."
                       : isOwner
                         ? `Message ${selectedChannel?.displayName ?? "channel"}... /help for commands`
@@ -1691,7 +1718,7 @@ export default function LiveRoomPage() {
                 />
                 <div className="flex items-center justify-between gap-3 px-1 mt-2 pt-2 border-t border-border/10">
                   <div className="flex items-center gap-2">
-                    {selectedChannel?.name !== "ai-agent" && (
+                    {selectedChannel?.type !== "ai" && (
                       <button
                         type="button"
                         onClick={() => {
